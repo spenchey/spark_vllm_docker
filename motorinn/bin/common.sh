@@ -31,11 +31,12 @@ SSH_OPTS=(
 run_remote() {
   local host="$1"
   shift
-  # Use remote Linux timeout to bound the command execution.
+  # Join remaining arguments into a single command string
+  local command="$*"
   # Safely quote the command string using Bash printf -v with %q before passing it to ssh.
   local quoted_cmd
-  printf -v quoted_cmd '%q' "$@"
-  timeout 25 bash -lc "${quoted_cmd}"
+  printf -v quoted_cmd '%q' "$command"
+  ssh "${SSH_OPTS[@]}" "$host" "timeout 25s bash -lc ${quoted_cmd}"
 }
 
 # Helper: Check if a port is in use on a remote host
