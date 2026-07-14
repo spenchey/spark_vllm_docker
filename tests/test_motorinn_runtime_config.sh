@@ -22,6 +22,8 @@ FORBIDDEN_PATTERNS=(
   "SECRET"
   "PASSWORD"
   "API_KEY"
+  "AUTHORIZATION"
+  "PRIVATE_KEY"
 )
 
 FAILED=0
@@ -50,15 +52,15 @@ for path in "${ALLOWED_PATHS[@]}"; do
   fi
 done
 
-# 3. Check forbidden patterns in environment file
+# 2b. Check forbidden key names in environment file
 echo "--- Checking forbidden secrets ---"
-if grep -iE '(TOKEN|SECRET|PASSWORD|API_KEY)' "${ENV_FILE}" > /dev/null 2>&1; then
+if grep -iE '(TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|PRIVATE_KEY)' "${ENV_FILE}" > /dev/null 2>&1; then
   log_fail "Environment file contains forbidden secret-like keys"
 else
   log_pass "No forbidden secret patterns in environment file"
 fi
 
-# 4. Verify exact identity values in environment file
+# 3. Verify exact identity values in environment file
 echo "--- Verifying environment values ---"
 check_env_val() {
   local key="$1"
@@ -80,14 +82,14 @@ check_env_val "HOST_PORT" "8000"
 check_env_val "MAX_MODEL_LEN" "262144"
 check_env_val "TP_SIZE" "2"
 
-# 5. Verify RDMA values
+# 4. Verify RDMA values
 echo "--- Verifying RDMA values ---"
 check_env_val "HEAD_ROCE_IP" "169.254.135.115"
 check_env_val "WORKER_ROCE_IP" "169.254.114.39"
 check_env_val "ROCE_IF_NAME" "enp1s0f1np1"
 check_env_val "IB_HCA_NAME" "rocep1s0f1"
 
-# 6. Check compose passes through required variables
+# 5. Check compose passes through required variables
 echo "--- Checking compose variable passthrough ---"
 REQUIRED_VARS=(
   "VLLM_IMAGE"
@@ -110,7 +112,7 @@ for var in "${REQUIRED_VARS[@]}"; do
   fi
 done
 
-# 7. Check entrypoint preserves structure
+# 6. Check entrypoint preserves structure
 echo "--- Checking entrypoint structure ---"
 if grep -q 'ROLE=head' "${ENTRYPOINT_FILE}" && grep -q 'ROLE=worker' "${ENTRYPOINT_FILE}"; then
   log_pass "Entrypoint preserves head/worker structure"
@@ -124,7 +126,7 @@ else
   log_fail "Entrypoint does not enforce mp backend"
 fi
 
-# 8. Check that environment file variables are consumed by entrypoint
+# 7. Check that environment file variables are consumed by entrypoint
 echo "--- Checking variable consumption ---"
 ENV_VARS=$(grep -E '^[A-Z_]+=' "${ENV_FILE}" | cut -d'=' -f1)
 for var in ${ENV_VARS}; do
@@ -136,10 +138,7 @@ for var in ${ENV_VARS}; do
   if grep -qE "\$\{${var}(:-[^}]*)?\}" "${ENTRYPOINT_FILE}"; then
     log_pass "Entrypoint consumes ${var}"
   else
-    # Some vars might be consumed indirectly via VLLM_EXTRA_ARGS or other mechanisms,
-    # but for this test, we check direct consumption. If not directly consumed, it's okay
-    # as long as it's in the env file for the service to pick up.
-    : # No failure for non-directly consumed vars if they are in the env file
+    log_fail "Entrypoint missing reference to ${var}"
   fi
 done
 
