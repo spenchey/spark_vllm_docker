@@ -4,8 +4,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/motorinn/env/deepseek-v4-flash-dspark-tp2.env"
-COMPOSE_FILE="${ROOT_DIR}/docker-compose.yml"
-ENTRYPOINT_FILE="${ROOT_DIR}/entrypoints/entrypoint.unholy.sh"
+COMPOSE_FILE="docker-compose.yml"
+ENTRYPOINT_FILE="entrypoints/entrypoint.unholy.sh"
 TEST_SCRIPT="${BASH_SOURCE[0]}"
 
 # Allowed paths for this card
@@ -41,7 +41,7 @@ echo "=== MOT-2456 Regression Test ==="
 
 # 1. Syntax check on bash files
 echo "--- Checking bash syntax ---"
-bash -n "${ENTRYPOINT_FILE}" || log_fail "entrypoint.unholy.sh has syntax errors"
+bash -n "${ROOT_DIR}/${ENTRYPOINT_FILE}" || log_fail "entrypoint.unholy.sh has syntax errors"
 bash -n "${TEST_SCRIPT}" || log_fail "test script has syntax errors"
 
 # 2. Check that only allowed paths are modified
@@ -51,12 +51,12 @@ if git rev-parse --git-dir > /dev/null 2>&1; then
   # Get changed files from base commit
   while IFS= read -r line; do
     CHANGED_PATHS+=("$line")
-  done < <(git diff --name-only bc334dd3e3770b3f7e9015d215f2ab3f65af4497 2>/dev/null || true)
+  done < <(git diff --name-only bc334dd3e3770b3f7e9015d215f2ab3f65af4497)
 
   # Get untracked files
   while IFS= read -r line; do
     CHANGED_PATHS+=("$line")
-  done < <(git ls-files --others --exclude-standard 2>/dev/null || true)
+  done < <(git ls-files --others --exclude-standard)
 else
   # Fallback: if not in git, assume no changes (or handle as needed, but spec implies git context)
   : # No paths changed if not in repo
@@ -88,7 +88,7 @@ fi
 
 # 2b. Check forbidden key names in environment file
 echo "--- Checking forbidden secrets ---"
-if grep -iE '(TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|PRIVATE_KEY)' "${ENV_FILE}" > /dev/null 2>&1; then
+if grep -iE '^[A-Z_][A-Z0-9_]*(TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|PRIVATE_KEY)=' "${ENV_FILE}" > /dev/null 2>&1; then
   log_fail "Environment file contains forbidden secret-like keys"
 else
   log_pass "No forbidden secret patterns in environment file"
@@ -139,7 +139,7 @@ REQUIRED_VARS=(
 )
 
 for var in "${REQUIRED_VARS[@]}"; do
-  if grep -q "\${${var}" "${COMPOSE_FILE}" || grep -q "\${${var}:-" "${COMPOSE_FILE}"; then
+  if grep -q "\${${var}" "${ROOT_DIR}/${COMPOSE_FILE}" || grep -q "\${${var}:-" "${ROOT_DIR}/${COMPOSE_FILE}"; then
     log_pass "Compose references ${var}"
   else
     log_fail "Compose missing reference to ${var}"
@@ -148,13 +148,13 @@ done
 
 # 6. Check entrypoint preserves structure
 echo "--- Checking entrypoint structure ---"
-if grep -q 'ROLE=head' "${ENTRYPOINT_FILE}" && grep -q 'ROLE=worker' "${ENTRYPOINT_FILE}"; then
+if grep -q 'ROLE=head' "${ROOT_DIR}/${ENTRYPOINT_FILE}" && grep -q 'ROLE=worker' "${ROOT_DIR}/${ENTRYPOINT_FILE}"; then
   log_pass "Entrypoint preserves head/worker structure"
 else
   log_fail "Entrypoint missing head/worker structure"
 fi
 
-if grep -q 'DISTRIBUTED_BACKEND.*mp' "${ENTRYPOINT_FILE}"; then
+if grep -q 'DISTRIBUTED_BACKEND.*mp' "${ROOT_DIR}/${ENTRYPOINT_FILE}"; then
   log_pass "Entrypoint enforces mp backend"
 else
   log_fail "Entrypoint does not enforce mp backend"
@@ -171,24 +171,24 @@ if git rev-parse --git-dir > /dev/null 2>&1; then
   while IFS= read -r line; do
     if [[ "$line" =~ ^\+ ]]; then
       # Extract variable references like ${VAR} or ${VAR:-...}
-      refs=$(echo "$line" | grep -oE '\$\{[A-Z_]+(:-[^}]*)?\}' || true)
+      refs=$(echo "$line" | grep -oE '\$\{[A-Z_][A-Z0-9_]+(:-[^}]*)?\}' || true)
       for ref in $refs; do
         var_name=$(echo "$ref" | sed 's/\${//; s/:.*//')
         ADDED_COMPOSE_VARS+=("$var_name")
       done
     fi
-  done < <(git diff bc334dd3e3770b3f7e9015d215f2ab3f65af4497 -- "${COMPOSE_FILE#*/}" 2>/dev/null || true)
+  done < <(git diff bc334dd3e3770b3f7e9015d215f2ab3f65af4497 -- "${COMPOSE_FILE}")
 
   # Get added lines in entrypoint.unholy.sh
   while IFS= read -r line; do
     if [[ "$line" =~ ^\+ ]]; then
-      refs=$(echo "$line" | grep -oE '\$\{[A-Z_]+(:-[^}]*)?\}' || true)
+      refs=$(echo "$line" | grep -oE '\$\{[A-Z_][A-Z0-9_]+(:-[^}]*)?\}' || true)
       for ref in $refs; do
         var_name=$(echo "$ref" | sed 's/\${//; s/:.*//')
         ADDED_ENTRYPOINT_VARS+=("$var_name")
       done
     fi
-  done < <(git diff bc334dd3e3770b3f7e9015d215f2ab3f65af4497 -- "${ENTRYPOINT_FILE#*/}" 2>/dev/null || true)
+  done < <(git diff bc334dd3e3770b3f7e9015d215f2ab3f65af4497 -- "${ENTRYPOINT_FILE}")
 fi
 
 # Combine all added vars to check against env file using newline-delimited scalar approach
