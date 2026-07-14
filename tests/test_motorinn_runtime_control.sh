@@ -34,8 +34,27 @@ RELEASE_PATH="/tmp/fake-release"
 run_remote() {
   printf 'remote|%s|%s\n' "$1" "$2" >> "$CALL_LOG"
   case "$2" in
+    *"--profile worker up -d worker"*)
+      [ "${TEST_REMOTE_FAILURE:-}" != "worker_start" ]
+      ;;
+    *"--profile head up -d head"*)
+      [ "${TEST_REMOTE_FAILURE:-}" != "head_start" ]
+      ;;
     *"curl -fsS --max-time 5 http://127.0.0.1:8000/health"*)
       [ "${TEST_HEALTH_STATE:-success}" = "success" ]
+      ;;
+    *"vllm-spark-head vllm-dspark-head vllm-head"*)
+      [ "${TEST_REMOTE_FAILURE:-}" != "head_remove" ]
+      ;;
+    *"vllm-spark-worker vllm-dspark-worker vllm-worker"*)
+      [ "${TEST_REMOTE_FAILURE:-}" != "worker_remove" ]
+      ;;
+    "ray stop --force")
+      if [ "$1" = "$HEAD_HOST" ]; then
+        [ "${TEST_REMOTE_FAILURE:-}" != "head_ray" ]
+      else
+        [ "${TEST_REMOTE_FAILURE:-}" != "worker_ray" ]
+      fi
       ;;
     *) return 0 ;;
   esac
@@ -201,7 +220,24 @@ expect_rc 1 "nonnumeric poll rejected"
 expect_output_line "invalid_health_poll" "poll validation message"
 expect_no_runtime_calls "invalid poll has no runtime calls"
 
-echo "Test 6: bounded health timeout"
+echo "Test 6: start remote failures"
+reset_case
+run_script "$BIN/start-dspark-tp2.sh" ALLOW_RUNTIME_START=1 TEST_REMOTE_FAILURE=worker_start
+expect_rc 1 "worker start failure is fatal"
+expect_log_contains "--profile worker up -d worker" "worker start was attempted"
+expect_log_absent "sleep|25" "worker failure prevents warmup"
+expect_log_absent "--profile head up -d head" "worker failure prevents head start"
+expect_log_absent "curl -fsS" "worker failure prevents health polling"
+
+reset_case
+run_script "$BIN/start-dspark-tp2.sh" ALLOW_RUNTIME_START=1 TEST_REMOTE_FAILURE=head_start
+expect_rc 1 "head start failure is fatal"
+expect_log_contains "--profile worker up -d worker" "worker starts before head failure"
+expect_log_contains "sleep|25" "worker warmup precedes head failure"
+expect_log_contains "--profile head up -d head" "head start was attempted"
+expect_log_absent "curl -fsS" "head failure prevents health polling"
+
+echo "Test 7: bounded health timeout"
 reset_case
 run_script "$BIN/start-dspark-tp2.sh" ALLOW_RUNTIME_START=1 TEST_HEALTH_STATE=fail HEALTH_TIMEOUT_SECONDS=1 HEALTH_POLL_SECONDS=1
 expect_rc 1 "health timeout fails"
@@ -211,7 +247,7 @@ expect_log_contains "remote|fake-head-host|docker logs --tail 200 vllm-spark-hea
 log_count=$(grep -cF "docker logs --tail 200" "$CALL_LOG")
 [ "$log_count" -eq 2 ] && pass "exactly two timeout log commands" || fail "unexpected timeout log count $log_count"
 
-echo "Test 7: approved safe stop"
+echo "Test 8: approved safe stop"
 reset_case
 run_script "$BIN/stop-vllm-spark.sh" ALLOW_RUNTIME_STOP=1
 expect_rc 0 "approved stop succeeds"
@@ -232,7 +268,23 @@ expect_log_absent "docker volume" "no volume mutation"
 expect_log_absent "comfy" "no media mutation"
 expect_log_absent "local-" "no local stop tools"
 
-echo "Test 8: production source guardrails"
+echo "Test 9: stop remote failure"
+reset_case
+run_script "$BIN/stop-vllm-spark.sh" ALLOW_RUNTIME_STOP=1 TEST_REMOTE_FAILURE=head_remove
+expect_rc 1 "one stop failure makes the command fail"
+expect_output_line "runtime_stop_partial_failure" "partial stop failure message"
+if grep -qx "runtime_stopped=true" "$OUTPUT"; then
+  fail "partial failure reported full success"
+else
+  pass "partial failure does not report full success"
+fi
+remote_count=$(grep -c '^remote|' "$CALL_LOG")
+[ "$remote_count" -eq 4 ] && pass "stop continues through all four operations" || fail "partial failure stopped after $remote_count operations"
+expect_log_contains "vllm-spark-worker vllm-dspark-worker vllm-worker" "worker removal attempted after head failure"
+expect_log_contains "remote|fake-head-host|ray stop --force" "head ray stop attempted after failure"
+expect_log_contains "remote|fake-worker-host|ray stop --force" "worker ray stop attempted after failure"
+
+echo "Test 10: production source guardrails"
 if grep -Eqi 'watchdog|wget|--build|docker compose down|docker (rmi|image rm|volume rm)|--filter|comfyui' "$BIN/start-dspark-tp2.sh" "$BIN/stop-vllm-spark.sh"; then
   fail "forbidden production source"
 else
