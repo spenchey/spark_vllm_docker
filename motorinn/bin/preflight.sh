@@ -47,6 +47,23 @@ for (( i=0; i<NUM_HOSTS; i++ )); do
   local_peer_reachable="false"
   local_ports_free="true"
 
+  # Probe once so an unreachable host fails closed without repeating every check.
+  if ! connectivity=$(run_remote "$host" "printf reachable" 2>/dev/null) || [[ "$connectivity" != "reachable" ]]; then
+    IDX_RUNTIME_SHA[$i]="unreachable"
+    IDX_DIRTY[$i]="true"
+    IDX_IMAGE_ID[$i]="unreachable"
+    IDX_INDEX_SHA256[$i]="unreachable"
+    IDX_SHARD_COUNT[$i]="0"
+    IDX_SERVED_MODEL[$i]="${SERVED_MODEL}"
+    IDX_MEDIA_STATE[$i]="unknown"
+    IDX_AVAILABLE_MEMORY_GIB[$i]="0"
+    IDX_RDMA_UP[$i]="false"
+    IDX_PEER_REACHABLE[$i]="false"
+    IDX_PORTS_FREE[$i]="false"
+    START_ALLOWED=false
+    continue
+  fi
+
   # 1. Check SSH connectivity and get runtime SHA
   # Capture git HEAD and status separately
   local_git_head=$(run_remote "$host" "cd ${RELEASE_PATH} && git rev-parse HEAD 2>/dev/null || echo 'ERROR'" 2>/dev/null) || { local_dirty="true"; local_git_head="unreachable"; }

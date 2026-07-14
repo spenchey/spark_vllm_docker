@@ -43,6 +43,11 @@ if echo "$NORMALIZED_CMD" | grep -q "spark-cb87"; then
 fi
 
 # Detect command type using case wildcards to handle escaped spaces
+if echo "$NORMALIZED_CMD" | grep -q "printf reachable"; then
+  echo "reachable"
+  exit 0
+fi
+
 if echo "$NORMALIZED_CMD" | grep -q "git rev-parse HEAD"; then
   if [[ $IS_WORKER -eq 1 ]] && [[ -f "${MOCK_STATE_DIR}/worker_git_sha" ]]; then
     cat "${MOCK_STATE_DIR}/worker_git_sha"
@@ -278,6 +283,8 @@ reset_state
 run_preflight_test "0"
 assert_exit 0 $RUN_EXIT || exit 1
 assert_contains "${OUTPUT_FILE}" "start_allowed=true" || exit 1
+assert_contains "${MOCK_COMMAND_LOG}" "spenchey@spark-2e61" || exit 1
+assert_contains "${MOCK_COMMAND_LOG}" "spenchey@spark-cb87" || exit 1
 echo "PASS: Test 1"
 
 # Test 2: Total SSH Failure
@@ -287,6 +294,11 @@ touch "${MOCK_STATE_DIR}/ssh_fail"
 run_preflight_test "0"
 assert_exit 1 $RUN_EXIT || exit 1
 assert_contains "${OUTPUT_FILE}" "start_allowed=false" || exit 1
+if [[ $(wc -l < "${MOCK_COMMAND_LOG}") -ne 2 ]]; then
+  echo "FAIL: Unreachable hosts should be probed exactly once each"
+  cat "${MOCK_COMMAND_LOG}"
+  exit 1
+fi
 echo "PASS: Test 2"
 
 # Test 3: Dirty Repo (SHA Mismatch)
