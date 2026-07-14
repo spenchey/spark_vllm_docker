@@ -25,6 +25,7 @@ services:
       - HOST_PORT=${HOST_PORT}
       - MAX_MODEL_LEN=${MAX_MODEL_LEN}
       - MAX_NUM_SEQS=${MAX_NUM_SEQS}
+      - KV_CACHE_DTYPE=${KV_CACHE_DTYPE:-fp8}
       - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION}
       - MAX_NUM_BATCHED_TOKENS=${MAX_NUM_BATCHED_TOKENS}
       - VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS:-}
@@ -68,12 +69,21 @@ services:
       - VLLM_CUSTOM_SCOPES_FOR_PROFILING=${VLLM_CUSTOM_SCOPES_FOR_PROFILING:-}
       - VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE=${VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE:-}
       - VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE_EXACT=${VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE_EXACT:-}
+      - VLLM_ENABLE_DEEPSEEK_V4_SPARSE_MLA_WARMUP=${VLLM_ENABLE_DEEPSEEK_V4_SPARSE_MLA_WARMUP:-1}
+      - VLLM_DEEP_GEMM_WARMUP=${VLLM_DEEP_GEMM_WARMUP:-relax}
+      - SPARK_ENABLE_FLASHINFER_AUTOTUNE=${SPARK_ENABLE_FLASHINFER_AUTOTUNE:-1}
       - FLASHINFER_DISABLE_VERSION_CHECK=${FLASHINFER_DISABLE_VERSION_CHECK:-}
       - TILELANG_CLEANUP_TEMP_FILES=${TILELANG_CLEANUP_TEMP_FILES:-}
       - DG_JIT_USE_NVRTC=${DG_JIT_USE_NVRTC:-}
       - DG_JIT_NVCC_COMPILER=${DG_JIT_NVCC_COMPILER:-}
       - DG_JIT_PRINT_COMPILER_COMMAND=${DG_JIT_PRINT_COMPILER_COMMAND:-}
       - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-}
+      - CUTE_DSL_ARCH=${CUTE_DSL_ARCH:-}
+      - CUDA_TOOLKIT_PATH=${CUDA_TOOLKIT_PATH:-}
+      - CUDA_HOME=${CUDA_HOME:-}
+      - CUDA_PATH=${CUDA_PATH:-}
+      - CUDAToolkit_ROOT=${CUDAToolkit_ROOT:-}
+      - LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}
       # ---- Patches (0 = disabled) ----
       - APPLY_TEXT_ONLY_SHIM=${APPLY_TEXT_ONLY_SHIM:-0}
       # GB10 UMA: bypass request_memory() startup pre-check (patch_skip_init_memory_check.py).
@@ -82,6 +92,9 @@ services:
       # GB10 UMA: skip profile_run() in fixed-KV branch (patch_dgx_spark_fixed_kv_profile_skip.py).
       # 1 = skip. Requires --kv-cache-memory-bytes > 0 (fail-closed otherwise).
       - VLLM_SPARK_SKIP_FIXED_KV_PROFILE_RUN=${VLLM_SPARK_SKIP_FIXED_KV_PROFILE_RUN:-0}
+      # GB10 UMA: skip the final V1 sampler dummy run after warmup when DSpark
+      # startup probes fail before the API opens.
+      - VLLM_SPARK_SKIP_FINAL_DUMMY_RUN=${VLLM_SPARK_SKIP_FINAL_DUMMY_RUN:-0}
       # Prompt-token admission control (patch_prompt_token_admission.py).
       # 0 = disabled (default). N = reject requests with prompt_tokens > N (HTTP 400).
       # Applied after chat-template/tokenizer, before engine enqueue.
@@ -105,6 +118,7 @@ services:
       - UCX_NET_DEVICES=${ROCE_IF_NAME:-}
       - NCCL_IB_HCA=${IB_HCA_NAME:-}
       - NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-0}
+      - NCCL_IB_GID_INDEX=${NCCL_IB_GID_INDEX:-}
       - NCCL_DEBUG=${NCCL_DEBUG:-WARN}
       - NCCL_NVLS_ENABLE=${NCCL_NVLS_ENABLE:-1}
       - VLLM_USE_BREAKABLE_CUDAGRAPH=${VLLM_USE_BREAKABLE_CUDAGRAPH:-}
@@ -120,6 +134,7 @@ services:
       - VLLM_B12X_W4A16_FORCE_BLOCKS_MAX_M=${VLLM_B12X_W4A16_FORCE_BLOCKS_MAX_M:-}
       - VLLM_B12X_W4A16_FORCE_TILE_CONFIG=${VLLM_B12X_W4A16_FORCE_TILE_CONFIG:-}
       - B12X_W4A16_TC_DECODE=${B12X_W4A16_TC_DECODE:-}
+      - SPARK_SKIP_DEEPSEEK_V4_MHC_WARMUP=${SPARK_SKIP_DEEPSEEK_V4_MHC_WARMUP:-0}
       - RAY_DEDUP_LOGS=0
       - RAY_memory_monitor_refresh_ms=${RAY_memory_monitor_refresh_ms:-0}
       # ---- Ray head/object-store tuning (diagnostic knobs, see
@@ -216,6 +231,7 @@ services:
       - HOST_PORT=${HOST_PORT:-8000}
       - MAX_MODEL_LEN=${MAX_MODEL_LEN}
       - MAX_NUM_SEQS=${MAX_NUM_SEQS}
+      - KV_CACHE_DTYPE=${KV_CACHE_DTYPE:-fp8}
       - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION}
       - MAX_NUM_BATCHED_TOKENS=${MAX_NUM_BATCHED_TOKENS}
       - VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS:-}
@@ -237,6 +253,7 @@ services:
       - UCX_NET_DEVICES=${ROCE_IF_NAME:-}
       - NCCL_IB_HCA=${IB_HCA_NAME:-}
       - NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-0}
+      - NCCL_IB_GID_INDEX=${NCCL_IB_GID_INDEX:-}
       - NCCL_DEBUG=${NCCL_DEBUG:-WARN}
       - NCCL_NVLS_ENABLE=${NCCL_NVLS_ENABLE:-1}
       - VLLM_USE_BREAKABLE_CUDAGRAPH=${VLLM_USE_BREAKABLE_CUDAGRAPH:-}
@@ -258,6 +275,7 @@ services:
       - VLLM_B12X_W4A16_FORCE_BLOCKS_MAX_M=${VLLM_B12X_W4A16_FORCE_BLOCKS_MAX_M:-}
       - VLLM_B12X_W4A16_FORCE_TILE_CONFIG=${VLLM_B12X_W4A16_FORCE_TILE_CONFIG:-}
       - B12X_W4A16_TC_DECODE=${B12X_W4A16_TC_DECODE:-}
+      - SPARK_SKIP_DEEPSEEK_V4_MHC_WARMUP=${SPARK_SKIP_DEEPSEEK_V4_MHC_WARMUP:-0}
       # ---- Model-specific env vars (0 = disabled) ----
       - VLLM_MARLIN_USE_ATOMIC_ADD=${VLLM_MARLIN_USE_ATOMIC_ADD:-0}
       - VLLM_USE_FLASHINFER_MOE_FP4=${VLLM_USE_FLASHINFER_MOE_FP4:-0}
@@ -293,12 +311,21 @@ services:
       - VLLM_CUSTOM_SCOPES_FOR_PROFILING=${VLLM_CUSTOM_SCOPES_FOR_PROFILING:-}
       - VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE=${VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE:-}
       - VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE_EXACT=${VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE_EXACT:-}
+      - VLLM_ENABLE_DEEPSEEK_V4_SPARSE_MLA_WARMUP=${VLLM_ENABLE_DEEPSEEK_V4_SPARSE_MLA_WARMUP:-1}
+      - VLLM_DEEP_GEMM_WARMUP=${VLLM_DEEP_GEMM_WARMUP:-relax}
+      - SPARK_ENABLE_FLASHINFER_AUTOTUNE=${SPARK_ENABLE_FLASHINFER_AUTOTUNE:-1}
       - FLASHINFER_DISABLE_VERSION_CHECK=${FLASHINFER_DISABLE_VERSION_CHECK:-}
       - TILELANG_CLEANUP_TEMP_FILES=${TILELANG_CLEANUP_TEMP_FILES:-}
       - DG_JIT_USE_NVRTC=${DG_JIT_USE_NVRTC:-}
       - DG_JIT_NVCC_COMPILER=${DG_JIT_NVCC_COMPILER:-}
       - DG_JIT_PRINT_COMPILER_COMMAND=${DG_JIT_PRINT_COMPILER_COMMAND:-}
       - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-}
+      - CUTE_DSL_ARCH=${CUTE_DSL_ARCH:-}
+      - CUDA_TOOLKIT_PATH=${CUDA_TOOLKIT_PATH:-}
+      - CUDA_HOME=${CUDA_HOME:-}
+      - CUDA_PATH=${CUDA_PATH:-}
+      - CUDAToolkit_ROOT=${CUDAToolkit_ROOT:-}
+      - LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}
       # ---- Patches (0 = disabled) ----
       - APPLY_TEXT_ONLY_SHIM=${APPLY_TEXT_ONLY_SHIM:-0}
       # GB10 UMA: bypass request_memory() startup pre-check (patch_skip_init_memory_check.py).
@@ -307,6 +334,9 @@ services:
       # GB10 UMA: skip profile_run() in fixed-KV branch (patch_dgx_spark_fixed_kv_profile_skip.py).
       # 1 = skip. Requires --kv-cache-memory-bytes > 0 (fail-closed otherwise).
       - VLLM_SPARK_SKIP_FIXED_KV_PROFILE_RUN=${VLLM_SPARK_SKIP_FIXED_KV_PROFILE_RUN:-0}
+      # GB10 UMA: skip the final V1 sampler dummy run after warmup when DSpark
+      # startup probes fail before the API opens.
+      - VLLM_SPARK_SKIP_FINAL_DUMMY_RUN=${VLLM_SPARK_SKIP_FINAL_DUMMY_RUN:-0}
       # Prompt-token admission control (patch_prompt_token_admission.py).
       # 0 = disabled (default). N = reject requests with prompt_tokens > N (HTTP 400).
       # Applied after chat-template/tokenizer, before engine enqueue.
@@ -368,3 +398,5 @@ services:
     # zero retries 로 강화: EngineCore init failure 는 운영자에게 surface,
     # 외부 supervisor 위임. 재시작이 필요하면 `docker compose up -d` 수동 호출.
     restart: "no"
+
+
