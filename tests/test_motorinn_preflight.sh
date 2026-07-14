@@ -233,7 +233,7 @@ run_preflight_test() {
   local allow_media="$1"
 
   set +e
-  ALLOW_MEDIA_STOP="$allow_media" PATH="${FAKE_BIN}:${ORIGINAL_PATH}" MOCK_STATE_DIR="${MOCK_STATE_DIR}" MOCK_COMMAND_LOG="${MOCK_COMMAND_LOG}" /bin/bash "${BIN_DIR}/preflight.sh" --check-only > "${OUTPUT_FILE}" 2> "${ERROR_FILE}"
+  ALLOW_MEDIA_STOP="$allow_media" EXPECTED_RUNTIME_SHA="$EXPECTED_SHA" PATH="${FAKE_BIN}:${ORIGINAL_PATH}" MOCK_STATE_DIR="${MOCK_STATE_DIR}" MOCK_COMMAND_LOG="${MOCK_COMMAND_LOG}" /bin/bash "${BIN_DIR}/preflight.sh" --check-only > "${OUTPUT_FILE}" 2> "${ERROR_FILE}"
   RUN_EXIT=$?
   set -e
 }

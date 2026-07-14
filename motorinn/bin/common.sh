@@ -6,8 +6,10 @@ set -euo pipefail
 export HEAD_HOST="${HEAD_HOST:-spark-2e61}"
 export WORKER_HOST="${WORKER_HOST:-spark-cb87}"
 export SSH_USER="${SSH_USER:-spenchey}"
-export RELEASE_PATH="${RELEASE_PATH:-/home/spenchey/apps/spark_vllm_docker}"
-export EXPECTED_RUNTIME_SHA="${EXPECTED_RUNTIME_SHA:-899e7ce7bbea4b2745e5981e45c11e02df80892f}"
+export REMOTE_REPO="${REMOTE_REPO:-${RELEASE_PATH:-/home/spenchey/apps/spark_vllm_docker.factory-release}}"
+export RELEASE_PATH="${REMOTE_REPO}"
+: "${EXPECTED_RUNTIME_SHA:?EXPECTED_RUNTIME_SHA must be supplied}"
+export EXPECTED_RUNTIME_SHA
 export EXPECTED_IMAGE_ID="${EXPECTED_IMAGE_ID:-sha256:85e1650f6c5cf0d694896f1085b24b585412cdd60d2b93d310d48b9f20a986da}"
 export SERVED_MODEL="${SERVED_MODEL:-deepseek-v4-flash-dspark}"
 export MODEL_PATH="${MODEL_PATH:-/home/spenchey/models/huggingface/deepseek-ai__DeepSeek-V4-Flash-DSpark}"
