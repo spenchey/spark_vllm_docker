@@ -1,6 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
+# Reject positional arguments
+if [ $# -gt 0 ]; then
+  echo "error: no positional arguments allowed"
+  exit 1
+fi
+
 # Approval gate: require explicit environment variable to allow runtime stop
 if [ "${ALLOW_RUNTIME_STOP:-}" != "1" ]; then
   echo "approval_required=ALLOW_RUNTIME_STOP"
@@ -11,14 +17,32 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
-# Stop containers on HEAD_HOST
-run_remote "$HEAD_HOST" "docker rm -f vllm-spark-head vllm-dspark-head vllm-head" || true
+# Aggregate failures while still addressing both hosts.
+stop_failed=0
+HEAD_REMOVE_COMMAND='command -v docker >/dev/null 2>&1 || exit 2; failed=0; for container in vllm-spark-head vllm-dspark-head vllm-head; do if docker container inspect "$container" >/dev/null 2>&1; then docker rm -f "$container" || failed=1; fi; done; exit "$failed"'
+WORKER_REMOVE_COMMAND='command -v docker >/dev/null 2>&1 || exit 2; failed=0; for container in vllm-spark-worker vllm-dspark-worker vllm-worker; do if docker container inspect "$container" >/dev/null 2>&1; then docker rm -f "$container" || failed=1; fi; done; exit "$failed"'
 
-# Stop containers on WORKER_HOST
-run_remote "$WORKER_HOST" "docker rm -f vllm-spark-worker vllm-dspark-worker vllm-worker" || true
+run_control() {
+  local host="$1"
+  local command="$2"
+  local rc
+  set +e
+  run_remote "$host" "$command"
+  rc=$?
+  set -e
+  if [ $rc -ne 0 ]; then
+    stop_failed=1
+  fi
+}
 
-# Stop Ray on both hosts
-run_remote "$HEAD_HOST" "ray stop --force"
-run_remote "$WORKER_HOST" "ray stop --force"
+run_control "$HEAD_HOST" "$HEAD_REMOVE_COMMAND"
+run_control "$WORKER_HOST" "$WORKER_REMOVE_COMMAND"
+run_control "$HEAD_HOST" "ray stop --force"
+run_control "$WORKER_HOST" "ray stop --force"
 
-echo "runtime_stopped=true"
+if [ $stop_failed -eq 0 ]; then
+  echo "runtime_stopped=true"
+else
+  echo "runtime_stop_partial_failure"
+  exit 1
+fi

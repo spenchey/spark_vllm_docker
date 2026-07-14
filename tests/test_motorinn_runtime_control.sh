@@ -1,246 +1,246 @@
 #!/bin/bash
 set -euo pipefail
 
-# Create isolated test fixture
-TEST_DIR=$(mktemp -d)
-trap "rm -rf $TEST_DIR" EXIT
+ROOT=$(mktemp -d)
+trap 'rm -rf "$ROOT"' EXIT
+BIN="$ROOT/bin"
+FAKE="$ROOT/fake"
+CALL_LOG="$ROOT/calls.log"
+OUTPUT="$ROOT/output.log"
+mkdir -p "$BIN" "$FAKE"
 
-# Copy production scripts into fixture
-cp motorinn/bin/start-dspark-tp2.sh "$TEST_DIR/"
-cp motorinn/bin/stop-vllm-spark.sh "$TEST_DIR/"
-cp motorinn/bin/common.sh "$TEST_DIR/"
+cp motorinn/bin/start-dspark-tp2.sh "$BIN/"
+cp motorinn/bin/stop-vllm-spark.sh "$BIN/"
+cp motorinn/bin/common.sh "$BIN/"
+chmod +x "$BIN/start-dspark-tp2.sh" "$BIN/stop-vllm-spark.sh"
 
-# Create fake preflight.sh that simulates various states
-cat > "$TEST_DIR/preflight.sh" << 'PREFLIGHT_EOF'
+cat > "$BIN/preflight.sh" <<'EOF'
 #!/bin/bash
-if [ "$1" != "--check-only" ]; then
-  exit 1
-fi
+printf 'preflight|%s\n' "$*" >> "$CALL_LOG"
+case "${TEST_PREFLIGHT_STATE:-pass}" in
+  fail) exit 1 ;;
+  no_start) printf 'start_allowed=false\n'; exit 0 ;;
+  media) printf 'blocked_media_in_use=true\nstart_allowed=true\n'; exit 0 ;;
+  pass) printf 'start_allowed=true\n'; exit 0 ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$BIN/preflight.sh"
 
-# Check environment variables to determine behavior
-if [ "${TEST_PREFLIGHT_STATE:-normal}" = "blocked_media" ]; then
-  echo "blocked_media_in_use=true"
-  echo "start_allowed=true"
-  exit 0
-elif [ "${TEST_PREFLIGHT_STATE:-normal}" = "no_start" ]; then
-  echo "start_allowed=false"
-  exit 0
-elif [ "${TEST_PREFLIGHT_STATE:-normal}" = "fail" ]; then
-  exit 1
-else
-  echo "start_allowed=true"
-  exit 0
-fi
-PREFLIGHT_EOF
-chmod +x "$TEST_DIR/preflight.sh"
-
-# Create fake common.sh with mocked run_remote
-cat > "$TEST_DIR/common.sh" << 'COMMON_EOF'
+cat > "$BIN/common.sh" <<'EOF'
 HEAD_HOST="fake-head-host"
 WORKER_HOST="fake-worker-host"
-SSH_USER="testuser"
 RELEASE_PATH="/tmp/fake-release"
-
 run_remote() {
-  echo "RUN_REMOTE_CALLED $1 $2"
-  return 0
+  printf 'remote|%s|%s\n' "$1" "$2" >> "$CALL_LOG"
+  case "$2" in
+    *"curl -fsS --max-time 5 http://127.0.0.1:8000/health"*)
+      [ "${TEST_HEALTH_STATE:-success}" = "success" ]
+      ;;
+    *) return 0 ;;
+  esac
 }
-COMMON_EOF
-chmod +x "$TEST_DIR/common.sh"
+EOF
 
-# Create fakes for external commands to ensure they are not called
-cat > "$TEST_DIR/docker" << 'DOCKER_EOF'
+cat > "$FAKE/sleep" <<'EOF'
 #!/bin/bash
-echo "FORBIDDEN_DOCKER_CALL $*"
-exit 1
-DOCKER_EOF
-chmod +x "$TEST_DIR/docker"
+printf 'sleep|%s\n' "$1" >> "$CALL_LOG"
+exit 0
+EOF
+chmod +x "$FAKE/sleep"
 
-cat > "$TEST_DIR/sleep" << 'SLEEP_EOF'
+for command in docker curl ssh ray; do
+  cat > "$FAKE/$command" <<'EOF'
 #!/bin/bash
-echo "FORBIDDEN_SLEEP_CALL $1"
-exit 1
-SLEEP_EOF
-chmod +x "$TEST_DIR/sleep"
+printf 'local-%s|%s\n' "$(basename "$0")" "$*" >> "$CALL_LOG"
+exit 99
+EOF
+  chmod +x "$FAKE/$command"
+done
 
-cat > "$TEST_DIR/curl" << 'CURL_EOF'
-#!/bin/bash
-echo "FORBIDDEN_CURL_CALL $*"
-exit 1
-CURL_EOF
-chmod +x "$TEST_DIR/curl"
-
-cat > "$TEST_DIR/ray" << 'RAY_EOF'
-#!/bin/bash
-echo "FORBIDDEN_RAY_CALL $*"
-exit 1
-RAY_EOF
-chmod +x "$TEST_DIR/ray"
-
-# Add test dir to PATH so fakes are picked up
-export PATH="$TEST_DIR:$PATH"
-
+TEST_PATH="$FAKE:$PATH"
 FAILED=0
+RC=0
 
-# Test 1: Start without approval should fail and not call remote/sleep
-echo "Test 1: Start without approval"
-output=$("$TEST_DIR/start-dspark-tp2.sh" 2>&1 || true)
-if echo "$output" | grep -q "approval_required=ALLOW_RUNTIME_START"; then
-  echo "PASS: Start refused without approval"
+reset_case() {
+  : > "$CALL_LOG"
+  : > "$OUTPUT"
+}
+
+run_script() {
+  local script="$1"
+  shift
+  set +e
+  env PATH="$TEST_PATH" CALL_LOG="$CALL_LOG" "$@" /bin/bash "$script" > "$OUTPUT" 2>&1
+  RC=$?
+  set -e
+}
+
+run_start_arg() {
+  set +e
+  env PATH="$TEST_PATH" CALL_LOG="$CALL_LOG" ALLOW_RUNTIME_START=1 /bin/bash "$BIN/start-dspark-tp2.sh" unexpected > "$OUTPUT" 2>&1
+  RC=$?
+  set -e
+}
+
+run_stop_arg() {
+  set +e
+  env PATH="$TEST_PATH" CALL_LOG="$CALL_LOG" ALLOW_RUNTIME_STOP=1 /bin/bash "$BIN/stop-vllm-spark.sh" unexpected > "$OUTPUT" 2>&1
+  RC=$?
+  set -e
+}
+
+pass() { printf 'PASS: %s\n' "$1"; }
+fail() { printf 'FAIL: %s\n' "$1"; FAILED=1; }
+
+expect_rc() {
+  local expected="$1"
+  local name="$2"
+  if [ "$RC" -eq "$expected" ]; then pass "$name"; else fail "$name expected rc=$expected got=$RC"; fi
+}
+
+expect_output_line() {
+  local expected="$1"
+  local name="$2"
+  if grep -qx "$expected" "$OUTPUT"; then pass "$name"; else fail "$name missing '$expected'"; fi
+}
+
+expect_log_contains() {
+  local expected="$1"
+  local name="$2"
+  if grep -qF -- "$expected" "$CALL_LOG"; then pass "$name"; else fail "$name missing '$expected'"; fi
+}
+
+expect_log_absent() {
+  local forbidden="$1"
+  local name="$2"
+  if grep -qF -- "$forbidden" "$CALL_LOG"; then fail "$name found '$forbidden'"; else pass "$name"; fi
+}
+
+expect_no_runtime_calls() {
+  local name="$1"
+  if grep -qE '^(remote|sleep|local-)' "$CALL_LOG"; then fail "$name"; else pass "$name"; fi
+}
+
+echo "Test 1: approval gates"
+reset_case
+run_script "$BIN/start-dspark-tp2.sh"
+expect_rc 1 "start refuses without approval"
+expect_output_line "approval_required=ALLOW_RUNTIME_START" "start approval message"
+[ ! -s "$CALL_LOG" ] && pass "start approval before all calls" || fail "start approval called a dependency"
+
+reset_case
+run_script "$BIN/stop-vllm-spark.sh"
+expect_rc 1 "stop refuses without approval"
+expect_output_line "approval_required=ALLOW_RUNTIME_STOP" "stop approval message"
+[ ! -s "$CALL_LOG" ] && pass "stop approval before all calls" || fail "stop approval called a dependency"
+
+echo "Test 2: positional arguments"
+reset_case
+run_start_arg
+expect_rc 1 "start rejects positional argument"
+[ ! -s "$CALL_LOG" ] && pass "start argument rejected before calls" || fail "start argument caused calls"
+
+reset_case
+run_stop_arg
+expect_rc 1 "stop rejects positional argument"
+[ ! -s "$CALL_LOG" ] && pass "stop argument rejected before calls" || fail "stop argument caused calls"
+
+echo "Test 3: preflight gates"
+reset_case
+run_script "$BIN/start-dspark-tp2.sh" ALLOW_RUNTIME_START=1 TEST_PREFLIGHT_STATE=fail
+expect_rc 1 "preflight exit blocks start"
+expect_output_line "preflight_check_failed" "preflight failure message"
+expect_no_runtime_calls "preflight failure has no runtime calls"
+
+reset_case
+run_script "$BIN/start-dspark-tp2.sh" ALLOW_RUNTIME_START=1 TEST_PREFLIGHT_STATE=no_start
+expect_rc 1 "start_allowed false blocks start"
+expect_output_line "start_not_allowed" "start_not_allowed message"
+expect_no_runtime_calls "start_allowed false has no runtime calls"
+
+reset_case
+run_script "$BIN/start-dspark-tp2.sh" ALLOW_RUNTIME_START=1 TEST_PREFLIGHT_STATE=media
+expect_rc 1 "media requires allowance"
+expect_output_line "media_blocked_no_allow" "media allowance message"
+expect_no_runtime_calls "media block has no runtime calls"
+
+echo "Test 4: successful start order"
+reset_case
+run_script "$BIN/start-dspark-tp2.sh" ALLOW_RUNTIME_START=1 ALLOW_MEDIA_STOP=1 TEST_PREFLIGHT_STATE=media TEST_HEALTH_STATE=success
+expect_rc 0 "approved media-safe start succeeds"
+expect_output_line "runtime_started=true" "runtime started message"
+expect_log_contains "remote|fake-worker-host|cd /tmp/fake-release && docker compose --env-file motorinn/env/deepseek-v4-flash-dspark-tp2.env --profile worker up -d worker" "exact worker start"
+expect_log_contains "sleep|25" "exact worker warmup"
+expect_log_contains "remote|fake-head-host|cd /tmp/fake-release && docker compose --env-file motorinn/env/deepseek-v4-flash-dspark-tp2.env --profile head up -d head" "exact head start"
+expect_log_contains "remote|fake-head-host|curl -fsS --max-time 5 http://127.0.0.1:8000/health" "bounded health check"
+worker_line=$(grep -nF -- "--profile worker up -d worker" "$CALL_LOG" | head -1 | cut -d: -f1)
+sleep_line=$(grep -nF "sleep|25" "$CALL_LOG" | head -1 | cut -d: -f1)
+head_line=$(grep -nF -- "--profile head up -d head" "$CALL_LOG" | head -1 | cut -d: -f1)
+health_line=$(grep -nF "curl -fsS --max-time 5" "$CALL_LOG" | head -1 | cut -d: -f1)
+if [ "$worker_line" -lt "$sleep_line" ] && [ "$sleep_line" -lt "$head_line" ] && [ "$head_line" -lt "$health_line" ]; then
+  pass "worker then 25 seconds then head then health"
 else
-  echo "FAIL: Start did not refuse without approval"
-  FAILED=1
+  fail "runtime order"
+fi
+expect_log_absent "--build" "no build"
+expect_log_absent " pull" "no pull"
+expect_log_absent "local-" "no local runtime tools"
+expect_log_absent "comfy" "no media service named"
+
+echo "Test 5: invalid health settings"
+reset_case
+run_script "$BIN/start-dspark-tp2.sh" ALLOW_RUNTIME_START=1 HEALTH_TIMEOUT_SECONDS=0
+expect_rc 1 "zero timeout rejected"
+expect_output_line "invalid_health_timeout" "timeout validation message"
+expect_no_runtime_calls "invalid timeout has no runtime calls"
+
+reset_case
+run_script "$BIN/start-dspark-tp2.sh" ALLOW_RUNTIME_START=1 HEALTH_POLL_SECONDS=abc
+expect_rc 1 "nonnumeric poll rejected"
+expect_output_line "invalid_health_poll" "poll validation message"
+expect_no_runtime_calls "invalid poll has no runtime calls"
+
+echo "Test 6: bounded health timeout"
+reset_case
+run_script "$BIN/start-dspark-tp2.sh" ALLOW_RUNTIME_START=1 TEST_HEALTH_STATE=fail HEALTH_TIMEOUT_SECONDS=1 HEALTH_POLL_SECONDS=1
+expect_rc 1 "health timeout fails"
+expect_output_line "health_check_timeout" "health timeout message"
+expect_log_contains "remote|fake-worker-host|docker logs --tail 200 vllm-spark-worker" "worker-only log"
+expect_log_contains "remote|fake-head-host|docker logs --tail 200 vllm-spark-head" "head-only log"
+log_count=$(grep -cF "docker logs --tail 200" "$CALL_LOG")
+[ "$log_count" -eq 2 ] && pass "exactly two timeout log commands" || fail "unexpected timeout log count $log_count"
+
+echo "Test 7: approved safe stop"
+reset_case
+run_script "$BIN/stop-vllm-spark.sh" ALLOW_RUNTIME_STOP=1
+expect_rc 0 "approved stop succeeds"
+expect_output_line "runtime_stopped=true" "runtime stopped message"
+expect_log_contains "remote|fake-head-host|command -v docker" "head exact removal command"
+expect_log_contains "vllm-spark-head vllm-dspark-head vllm-head" "head allowlist"
+expect_log_contains "remote|fake-worker-host|command -v docker" "worker exact removal command"
+expect_log_contains "vllm-spark-worker vllm-dspark-worker vllm-worker" "worker allowlist"
+expect_log_contains "remote|fake-head-host|ray stop --force" "head ray stop"
+expect_log_contains "remote|fake-worker-host|ray stop --force" "worker ray stop"
+remote_count=$(grep -c '^remote|' "$CALL_LOG")
+[ "$remote_count" -eq 4 ] && pass "exactly four stop host operations" || fail "unexpected stop operation count $remote_count"
+expect_log_absent "--filter" "no broad filter"
+expect_log_absent "*" "no wildcard"
+expect_log_absent "compose down" "no compose down"
+expect_log_absent "docker image" "no image mutation"
+expect_log_absent "docker volume" "no volume mutation"
+expect_log_absent "comfy" "no media mutation"
+expect_log_absent "local-" "no local stop tools"
+
+echo "Test 8: production source guardrails"
+if grep -Eqi 'watchdog|wget|--build|docker compose down|docker (rmi|image rm|volume rm)|--filter|comfyui' "$BIN/start-dspark-tp2.sh" "$BIN/stop-vllm-spark.sh"; then
+  fail "forbidden production source"
+else
+  pass "production source guardrails"
 fi
 
-# Test 2: Stop without approval should fail
-echo "Test 2: Stop without approval"
-output=$("$TEST_DIR/stop-vllm-spark.sh" 2>&1 || true)
-if echo "$output" | grep -q "approval_required=ALLOW_RUNTIME_STOP"; then
-  echo "PASS: Stop refused without approval"
-else
-  echo "FAIL: Stop did not refuse without approval"
-  FAILED=1
-fi
-
-# Test 3: Preflight failure blocks start
-echo "Test 3: Preflight failure blocks start"
-TEST_PREFLIGHT_STATE=fail "$TEST_DIR/start-dspark-tp2.sh" 2>&1 || true
-if [ $? -ne 0 ]; then
-  echo "PASS: Start blocked by preflight failure"
-else
-  echo "FAIL: Start not blocked by preflight failure"
-  FAILED=1
-fi
-
-# Test 4: Preflight start_allowed=false blocks start
-echo "Test 4: Preflight start_allowed=false blocks start"
-TEST_PREFLIGHT_STATE=no_start "$TEST_DIR/start-dspark-tp2.sh" 2>&1 || true
-if [ $? -ne 0 ]; then
-  echo "PASS: Start blocked by start_allowed=false"
-else
-  echo "FAIL: Start not blocked by start_allowed=false"
-  FAILED=1
-fi
-
-# Test 5: Media blocked without ALLOW_MEDIA_STOP
-echo "Test 5: Media blocked without ALLOW_MEDIA_STOP"
-TEST_PREFLIGHT_STATE=blocked_media "$TEST_DIR/start-dspark-tp2.sh" 2>&1 || true
-if [ $? -ne 0 ]; then
-  echo "PASS: Start blocked by media without ALLOW_MEDIA_STOP"
-else
-  echo "FAIL: Start not blocked by media without ALLOW_MEDIA_STOP"
-  FAILED=1
-fi
-
-# Test 6: Media with ALLOW_MEDIA_STOP allows start (but no media mutation)
-echo "Test 6: Media with ALLOW_MEDIA_STOP allows start"
-TEST_PREFLIGHT_STATE=blocked_media ALLOW_RUNTIME_START=1 "$TEST_DIR/start-dspark-tp2.sh" 2>&1 || true
-if [ $? -eq 0 ]; then
-  echo "PASS: Start allowed with media and ALLOW_MEDIA_STOP"
-else
-  echo "FAIL: Start not allowed with media and ALLOW_MEDIA_STOP"
-  FAILED=1
-fi
-
-# Test 7: Verify worker starts before sleep 25 and head
-echo "Test 7: Worker start order verification"
-# We can't easily verify timing in this isolated env without mocking, 
-# but we can check the script content for forbidden commands
-if grep -q "docker compose.*--profile worker up" "$TEST_DIR/start-dspark-tp2.sh" && \
-   grep -q "sleep 25" "$TEST_DIR/start-dspark-tp2.sh" && \
-   grep -q "docker compose.*--profile head up" "$TEST_DIR/start-dspark-tp2.sh"; then
-  echo "PASS: Start order structure looks correct"
-else
-  echo "FAIL: Start order structure incorrect"
-  FAILED=1
-fi
-
-# Test 8: No --build or --pull in start script
-echo "Test 8: No build/pull in start script"
-if grep -q "\-\-build" "$TEST_DIR/start-dspark-tp2.sh" || grep -q "\-\-pull" "$TEST_DIR/start-dspark-tp2.sh"; then
-  echo "FAIL: Found --build or --pull in start script"
-  FAILED=1
-else
-  echo "PASS: No build/pull in start script"
-fi
-
-# Test 9: Stop uses exact container names
-echo "Test 9: Stop uses exact container names"
-if grep -q "docker rm -f vllm-spark-head vllm-dspark-head vllm-head" "$TEST_DIR/stop-vllm-spark.sh" && \
-   grep -q "docker rm -f vllm-spark-worker vllm-dspark-worker vllm-worker" "$TEST_DIR/stop-vllm-spark.sh"; then
-  echo "PASS: Stop uses exact container names"
-else
-  echo "FAIL: Stop does not use exact container names"
-  FAILED=1
-fi
-
-# Test 10: Stop uses ray stop --force
-echo "Test 10: Stop uses ray stop --force"
-if grep -q "ray stop --force" "$TEST_DIR/stop-vllm-spark.sh"; then
-  echo "PASS: Stop uses ray stop --force"
-else
-  echo "FAIL: Stop does not use ray stop --force"
-  FAILED=1
-fi
-
-# Test 11: No wildcard/filter/compose down/image/volume/file/media mutation in stop
-echo "Test 11: No forbidden commands in stop script"
-if grep -qE "docker compose down|docker rmi|docker volume rm|\*|media" "$TEST_DIR/stop-vllm-spark.sh"; then
-  echo "FAIL: Found forbidden commands in stop script"
-  FAILED=1
-else
-  echo "PASS: No forbidden commands in stop script"
-fi
-
-# Test 12: Health timeout bounded
-echo "Test 12: Health timeout bounded"
-if grep -q "HEALTH_TIMEOUT_SECONDS" "$TEST_DIR/start-dspark-tp2.sh" && \
-   grep -q "SECONDS" "$TEST_DIR/start-dspark-tp2.sh"; then
-  echo "PASS: Health timeout is bounded"
-else
-  echo "FAIL: Health timeout is not bounded"
-  FAILED=1
-fi
-
-# Test 13: Runtime started message
-echo "Test 13: Runtime started message"
-if grep -q "runtime_started=true" "$TEST_DIR/start-dspark-tp2.sh"; then
-  echo "PASS: Runtime started message present"
-else
-  echo "FAIL: Runtime started message missing"
-  FAILED=1
-fi
-
-# Test 14: Runtime stopped message
-echo "Test 14: Runtime stopped message"
-if grep -q "runtime_stopped=true" "$TEST_DIR/stop-vllm-spark.sh"; then
-  echo "PASS: Runtime stopped message present"
-else
-  echo "FAIL: Runtime stopped message missing"
-  FAILED=1
-fi
-
-# Test 15: Scan for forbidden commands in production scripts
-echo "Test 15: Scan for forbidden commands"
-FORBIDDEN_FOUND=0
-if grep -qE "watchdog|wget|curl.*http" "$TEST_DIR/start-dspark-tp2.sh"; then
-  echo "FAIL: Found forbidden command in start script"
-  FORBIDDEN_FOUND=1
-fi
-if grep -qE "docker compose down|docker rmi|docker volume rm" "$TEST_DIR/stop-vllm-spark.sh"; then
-  echo "FAIL: Found forbidden command in stop script"
-  FORBIDDEN_FOUND=1
-fi
-if [ $FORBIDDEN_FOUND -eq 0 ]; then
-  echo "PASS: No forbidden commands found"
-else
-  FAILED=1
-fi
-
-if [ $FAILED -eq 0 ]; then
-  echo "All tests passed"
-  exit 0
-else
+if [ "$FAILED" -ne 0 ]; then
   echo "Some tests failed"
   exit 1
 fi
+echo "All runtime-control tests passed"
