@@ -216,6 +216,17 @@ else
   log_pass "No new variable references added in diff"
 fi
 
+# 8. Verify mandatory DSpark Compose environment values
+echo "--- Verifying mandatory DSpark Compose environment values ---"
+check_env_val "ENTRYPOINT_FILE" "./entrypoints/entrypoint.unholy.sh"
+check_env_val "MODEL_CONTAINER_PATH" "/models/DeepSeek-V4-Flash-DSpark"
+check_env_val "CLUSTER_MODE" "dual-rdma"
+check_env_val "DISTRIBUTED_BACKEND" "mp"
+check_env_val "MASTER_PORT" "29500"
+check_env_val "MAX_NUM_SEQS" "1"
+check_env_val "GPU_MEMORY_UTILIZATION" "0.80"
+check_env_val "MAX_NUM_BATCHED_TOKENS" "8192"
+
 echo "=============================="
 if [ ${FAILED} -eq 0 ]; then
   echo "All tests passed."
