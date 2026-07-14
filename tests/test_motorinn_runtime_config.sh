@@ -71,18 +71,20 @@ if [ ${#CHANGED_PATHS[@]} -gt 0 ]; then
 fi
 
 # Check for any path outside allowed paths
-for path in "${UNIQUE_CHANGED_PATHS[@]}"; do
-  allowed=0
-  for allowed_path in "${ALLOWED_PATHS[@]}"; do
-    if [ "$path" = "$allowed_path" ]; then
-      allowed=1
-      break
+if [ ${#UNIQUE_CHANGED_PATHS[@]} -gt 0 ]; then
+  for path in "${UNIQUE_CHANGED_PATHS[@]}"; do
+    allowed=0
+    for allowed_path in "${ALLOWED_PATHS[@]}"; do
+      if [ "$path" = "$allowed_path" ]; then
+        allowed=1
+        break
+      fi
+    done
+    if [ $allowed -eq 0 ]; then
+      log_fail "Unexpected path changed: ${path}"
     fi
   done
-  if [ $allowed -eq 0 ]; then
-    log_fail "Unexpected path changed: ${path}"
-  fi
-done
+fi
 
 # 2b. Check forbidden key names in environment file
 echo "--- Checking forbidden secrets ---"
@@ -189,20 +191,27 @@ if git rev-parse --git-dir > /dev/null 2>&1; then
   done < <(git diff bc334dd3e3770b3f7e9015d215f2ab3f65af4497 -- "${ENTRYPOINT_FILE#*/}" 2>/dev/null || true)
 fi
 
-# Combine all added vars to check against env file
-ALL_ADDED_VARS=()
-for v in "${ADDED_COMPOSE_VARS[@]}"; do ALL_ADDED_VARS+=("$v"); done
-for v in "${ADDED_ENTRYPOINT_VARS[@]}"; do ALL_ADDED_VARS+=("$v"); done
+# Combine all added vars to check against env file using newline-delimited scalar approach
+ALL_ADDED_VARS_STR=""
+if [ ${#ADDED_COMPOSE_VARS[@]} -gt 0 ]; then
+  ALL_ADDED_VARS_STR=$(printf '%s\n' "${ADDED_COMPOSE_VARS[@]}")
+fi
+if [ ${#ADDED_ENTRYPOINT_VARS[@]} -gt 0 ]; then
+  if [ -n "$ALL_ADDED_VARS_STR" ]; then
+    ALL_ADDED_VARS_STR="${ALL_ADDED_VARS_STR}"
+  fi
+  ALL_ADDED_VARS_STR=$(printf '%s\n%s' "$ALL_ADDED_VARS_STR" "$(printf '%s\n' "${ADDED_ENTRYPOINT_VARS[@]}")")
+fi
 
 # Check that each added var has a matching KEY= line in the env file
-if [ ${#ALL_ADDED_VARS[@]} -gt 0 ]; then
-  for var in "${ALL_ADDED_VARS[@]}"; do
+if [ -n "$ALL_ADDED_VARS_STR" ]; then
+  while IFS= read -r var; do
     if grep -qE "^${var}=" "${ENV_FILE}"; then
       log_pass "Env file contains key for added ref: ${var}"
     else
       log_fail "Env file missing key for added ref: ${var}"
     fi
-  done
+  done <<< "$ALL_ADDED_VARS_STR"
 else
   log_pass "No new variable references added in diff"
 fi
