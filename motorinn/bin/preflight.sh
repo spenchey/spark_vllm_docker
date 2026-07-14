@@ -11,82 +11,99 @@ if [[ $# -ne 1 ]] || [[ "$1" != "--check-only" ]]; then
 fi
 
 # Initialize status variables for each host
-declare -A HOST_STATUS
+# Using indexed arrays to be compatible with Bash 3.2 (no associative arrays)
 HOSTS=("${HEAD_HOST}" "${WORKER_HOST}")
+NUM_HOSTS=${#HOSTS[@]}
+
+# Arrays to hold status fields for each host index
+IDX_RUNTIME_SHA=()
+IDX_DIRTY=()
+IDX_IMAGE_ID=()
+IDX_INDEX_SHA256=()
+IDX_SHARD_COUNT=()
+IDX_SERVED_MODEL=()
+IDX_MEDIA_STATE=()
+IDX_AVAILABLE_MEMORY_GIB=()
+IDX_RDMA_UP=()
+IDX_PEER_REACHABLE=()
+IDX_PORTS_FREE=()
+
 START_ALLOWED=true
 MEDIA_BLOCKED=false
 
-for host in "${HOSTS[@]}"; do
+for (( i=0; i<NUM_HOSTS; i++ )); do
+  host="${HOSTS[$i]}"
+
   # Default values for this host's check
-  runtime_sha=""
-  dirty="false"
-  image_id=""
-  index_sha256=""
-  shard_count="0"
-  served_model=""
-  media_state="none"
-  available_memory_gib=0
-  rdma_up="false"
-  peer_reachable="false"
-  ports_free="true"
+  local_runtime_sha=""
+  local_dirty="false"
+  local_image_id=""
+  local_index_sha256=""
+  local_shard_count="0"
+  local_served_model="${SERVED_MODEL}"
+  local_media_state="none"
+  local_available_memory_gib=0
+  local_rdma_up="false"
+  local_peer_reachable="false"
+  local_ports_free="true"
   
   # 1. Check SSH connectivity and get runtime SHA
   # Capture git HEAD and status separately
-  local_git_head=$(run_remote "$host" "cd ${RELEASE_PATH} && git rev-parse HEAD 2>/dev/null || echo 'ERROR'" 2>/dev/null) || { dirty="true"; local_git_head="unreachable"; }
-  local_git_status=$(run_remote "$host" "cd ${RELEASE_PATH} && git status --porcelain 2>/dev/null || echo 'ERROR'" 2>/dev/null) || { dirty="true"; local_git_status="unreachable"; }
+  local_git_head=$(run_remote "$host" "cd ${RELEASE_PATH} && git rev-parse HEAD 2>/dev/null || echo 'ERROR'" 2>/dev/null) || { local_dirty="true"; local_git_head="unreachable"; }
+  local_git_status=$(run_remote "$host" "cd ${RELEASE_PATH} && git status --porcelain 2>/dev/null || echo 'ERROR'" 2>/dev/null) || { local_dirty="true"; local_git_status="unreachable"; }
 
   if [[ "$local_git_head" == "ERROR" ]] || [[ "$local_git_head" == "unreachable" ]]; then
-    dirty="true"
-    runtime_sha="unreachable"
+    local_dirty="true"
+    local_runtime_sha="unreachable"
   elif [[ "$local_git_head" != "${EXPECTED_RUNTIME_SHA}" ]]; then
-    dirty="true"
-    runtime_sha="$local_git_head"
+    local_dirty="true"
+    local_runtime_sha="$local_git_head"
   else
-    runtime_sha="$local_git_head"
+    local_runtime_sha="$local_git_head"
   fi
 
   # Dirty means any status output
   if [[ -n "$local_git_status" ]] && [[ "$local_git_status" != "unreachable" ]]; then
-    dirty="true"
+    local_dirty="true"
   fi
 
   # 2. Check Image ID (Local image tag, not running container)
   # We inspect the local image tag vllm-dspark-runtime:dspark-nvfp4-stage-c
-  if ! image_id=$(run_remote "$host" "docker image inspect --format='{{.Id}}' vllm-dspark-runtime:dspark-nvfp4-stage-c 2>/dev/null || echo 'ERROR'" 2>/dev/null); then
-    image_id="unreachable"
-    dirty="true"
+  if ! local_image_id=$(run_remote "$host" "docker image inspect --format='{{.Id}}' vllm-dspark-runtime:dspark-nvfp4-stage-c 2>/dev/null || echo 'ERROR'" 2>/dev/null); then
+    local_image_id="unreachable"
+    local_dirty="true"
   else
-    if [[ "$image_id" == "ERROR" ]]; then
-      dirty="true"
-    elif [[ "$image_id" != "${EXPECTED_IMAGE_ID}" ]]; then
-      dirty="true"
+    if [[ "$local_image_id" == "ERROR" ]]; then
+      local_dirty="true"
+    elif [[ "$local_image_id" != "${EXPECTED_IMAGE_ID}" ]]; then
+      local_dirty="true"
     fi
   fi
 
   # 3. Check Model Shards and Index SHA
-  if ! shard_count=$(run_remote "$host" "find ${MODEL_PATH} -name '*.safetensors' | wc -l" 2>/dev/null); then
-    shard_count="0"
-    dirty="true"
+  if ! local_shard_count=$(run_remote "$host" "find ${MODEL_PATH} -maxdepth 1 -name '*.safetensors' | wc -l" 2>/dev/null); then
+    local_shard_count="0"
+    local_dirty="true"
   fi
   
-  if [[ "$shard_count" != "${SHARD_COUNT}" ]]; then
-    dirty="true"
+  if [[ "$local_shard_count" != "${SHARD_COUNT}" ]]; then
+    local_dirty="true"
   fi
 
-  if ! index_sha256=$(run_remote "$host" "sha256sum ${MODEL_PATH}/model.safetensors.index.json 2>/dev/null | awk '{print \$1}' || echo 'ERROR'" 2>/dev/null); then
-    index_sha256="unreachable"
-    dirty="true"
+  if ! local_index_sha256=$(run_remote "$host" "sha256sum ${MODEL_PATH}/model.safetensors.index.json 2>/dev/null | awk '{print \$1}' || echo 'ERROR'" 2>/dev/null); then
+    local_index_sha256="unreachable"
+    local_dirty="true"
   else
-    if [[ "$index_sha256" == "ERROR" ]]; then
-      dirty="true"
+    if [[ "$local_index_sha256" == "ERROR" ]]; then
+      local_dirty="true"
     fi
   fi
 
   # 4. Check RDMA Interface
   if run_remote "$host" "ip link show ${RDMA_INTERFACE} | grep -q 'state UP' 2>/dev/null"; then
-    rdma_up="true"
+    local_rdma_up="true"
   else
-    dirty="true"
+    local_dirty="true"
   fi
 
   # 5. Check Peer Reachability (ICMP)
@@ -97,60 +114,74 @@ for host in "${HOSTS[@]}"; do
   fi
   
   if run_remote "$host" "ping -c 1 -W 5 ${peer_ip} >/dev/null 2>&1"; then
-    peer_reachable="true"
+    local_peer_reachable="true"
   else
-    dirty="true"
+    local_dirty="true"
   fi
 
   # 6. Check Ports (8000, 29500, 6379, 8265)
   for port in 8000 29500 6379 8265; do
     if check_port "$host" "$port"; then
-      ports_free="false"
-      dirty="true"
+      local_ports_free="false"
+      local_dirty="true"
     fi
   done
 
   # 7. Check Memory (Numeric available memory >=110)
-  if ! available_memory_gib=$(run_remote "$host" "free -g | awk '/Mem:/ {print \$7}'" 2>/dev/null); then
-    available_memory_gib=0
-    dirty="true"
+  if ! local_available_memory_gib=$(run_remote "$host" "free -g | awk '/Mem:/ {print \$7}'" 2>/dev/null); then
+    local_available_memory_gib=0
+    local_dirty="true"
   fi
   
-  # Ensure numeric comparison
-  if [[ ${available_memory_gib} -lt ${MIN_MEMORY_GIB} ]]; then
-    dirty="true"
+  # Validate available_memory_gib with a digits-only check before numeric comparison
+  if [[ ! "$local_available_memory_gib" =~ ^[0-9]+$ ]]; then
+    local_dirty="true"
+    local_available_memory_gib=0
+  else
+    # Ensure numeric comparison
+    if [[ ${local_available_memory_gib} -lt ${MIN_MEMORY_GIB} ]]; then
+      local_dirty="true"
+    fi
   fi
 
   # 8. Check Media
   if check_media "$host"; then
-    media_state="blocked"
+    local_media_state="blocked"
     MEDIA_BLOCKED=true
   else
-    media_state="none"
+    local_media_state="none"
   fi
 
-  # Store status for this host
-  HOST_STATUS["${host}_runtime_sha"]="$runtime_sha"
-  HOST_STATUS["${host}_dirty"]="$dirty"
-  HOST_STATUS["${host}_image_id"]="$image_id"
-  HOST_STATUS["${host}_index_sha256"]="$index_sha256"
-  HOST_STATUS["${host}_shard_count"]="$shard_count"
-  HOST_STATUS["${host}_served_model"]="${SERVED_MODEL}"
-  HOST_STATUS["${host}_media_state"]="$media_state"
-  HOST_STATUS["${host}_available_memory_gib"]="$available_memory_gib"
-  HOST_STATUS["${host}_rdma_up"]="$rdma_up"
-  HOST_STATUS["${host}_peer_reachable"]="$peer_reachable"
-  HOST_STATUS["${host}_ports_free"]="$ports_free"
+  # Store status for this host index
+  IDX_RUNTIME_SHA[$i]="$local_runtime_sha"
+  IDX_DIRTY[$i]="$local_dirty"
+  IDX_IMAGE_ID[$i]="$local_image_id"
+  IDX_INDEX_SHA256[$i]="$local_index_sha256"
+  IDX_SHARD_COUNT[$i]="$local_shard_count"
+  IDX_SERVED_MODEL[$i]="$local_served_model"
+  IDX_MEDIA_STATE[$i]="$local_media_state"
+  IDX_AVAILABLE_MEMORY_GIB[$i]="$local_available_memory_gib"
+  IDX_RDMA_UP[$i]="$local_rdma_up"
+  IDX_PEER_REACHABLE[$i]="$local_peer_reachable"
+  IDX_PORTS_FREE[$i]="$local_ports_free"
 
   # If any dirty flag is true, start_allowed becomes false
-  if [[ "$dirty" == "true" ]]; then
+  if [[ "$local_dirty" == "true" ]]; then
     START_ALLOWED=false
   fi
 done
 
 # Cross-host index SHA comparison defect fix
-HEAD_INDEX="${HOST_STATUS[${HEAD_HOST}_index_sha256]}"
-WORKER_INDEX="${HOST_STATUS[${WORKER_HOST}_index_sha256]}"
+# Map hosts to their indices for consistent access
+HEAD_IDX=0
+WORKER_IDX=1
+if [[ "${HOSTS[0]}" == "${WORKER_HOST}" ]]; then
+  HEAD_IDX=1
+  WORKER_IDX=0
+fi
+
+HEAD_INDEX="${IDX_INDEX_SHA256[$HEAD_IDX]}"
+WORKER_INDEX="${IDX_INDEX_SHA256[$WORKER_IDX]}"
 if [[ -z "$HEAD_INDEX" ]] || [[ "$HEAD_INDEX" == "ERROR" ]] || [[ "$HEAD_INDEX" == "unreachable" ]]; then
   START_ALLOWED=false
 fi
@@ -167,19 +198,20 @@ if [[ "$MEDIA_BLOCKED" == "true" ]] && [[ "${ALLOW_MEDIA_STOP:-0}" != "1" ]]; th
 fi
 
 # Print machine-readable status for each host
-for host in "${HOSTS[@]}"; do
+for (( i=0; i<NUM_HOSTS; i++ )); do
+  host="${HOSTS[$i]}"
   echo "host=${host}"
-  echo "runtime_sha=${HOST_STATUS[${host}_runtime_sha]}"
-  echo "dirty=${HOST_STATUS[${host}_dirty]}"
-  echo "image_id=${HOST_STATUS[${host}_image_id]}"
-  echo "index_sha256=${HOST_STATUS[${host}_index_sha256]}"
-  echo "shard_count=${HOST_STATUS[${host}_shard_count]}"
-  echo "served_model=${HOST_STATUS[${host}_served_model]}"
-  echo "media_state=${HOST_STATUS[${host}_media_state]}"
-  echo "available_memory_gib=${HOST_STATUS[${host}_available_memory_gib]}"
-  echo "rdma_up=${HOST_STATUS[${host}_rdma_up]}"
-  echo "peer_reachable=${HOST_STATUS[${host}_peer_reachable]}"
-  echo "ports_free=${HOST_STATUS[${host}_ports_free]}"
+  echo "runtime_sha=${IDX_RUNTIME_SHA[$i]}"
+  echo "dirty=${IDX_DIRTY[$i]}"
+  echo "image_id=${IDX_IMAGE_ID[$i]}"
+  echo "index_sha256=${IDX_INDEX_SHA256[$i]}"
+  echo "shard_count=${IDX_SHARD_COUNT[$i]}"
+  echo "served_model=${IDX_SERVED_MODEL[$i]}"
+  echo "media_state=${IDX_MEDIA_STATE[$i]}"
+  echo "available_memory_gib=${IDX_AVAILABLE_MEMORY_GIB[$i]}"
+  echo "rdma_up=${IDX_RDMA_UP[$i]}"
+  echo "peer_reachable=${IDX_PEER_REACHABLE[$i]}"
+  echo "ports_free=${IDX_PORTS_FREE[$i]}"
   echo "---"
 done
 
