@@ -46,7 +46,7 @@ for (( i=0; i<NUM_HOSTS; i++ )); do
   local_rdma_up="false"
   local_peer_reachable="false"
   local_ports_free="true"
-  
+
   # 1. Check SSH connectivity and get runtime SHA
   # Capture git HEAD and status separately
   local_git_head=$(run_remote "$host" "cd ${RELEASE_PATH} && git rev-parse HEAD 2>/dev/null || echo 'ERROR'" 2>/dev/null) || { local_dirty="true"; local_git_head="unreachable"; }
@@ -85,7 +85,7 @@ for (( i=0; i<NUM_HOSTS; i++ )); do
     local_shard_count="0"
     local_dirty="true"
   fi
-  
+
   if [[ "$local_shard_count" != "${SHARD_COUNT}" ]]; then
     local_dirty="true"
   fi
@@ -112,7 +112,7 @@ for (( i=0; i<NUM_HOSTS; i++ )); do
   else
     peer_ip="${HEAD_IP}"
   fi
-  
+
   if run_remote "$host" "ping -c 1 -W 5 ${peer_ip} >/dev/null 2>&1"; then
     local_peer_reachable="true"
   else
@@ -138,7 +138,7 @@ for (( i=0; i<NUM_HOSTS; i++ )); do
     local_available_memory_gib=0
     local_dirty="true"
   fi
-  
+
   # Validate available_memory_gib with a digits-only check before numeric comparison
   if [[ ! "$local_available_memory_gib" =~ ^[0-9]+$ ]]; then
     local_dirty="true"
