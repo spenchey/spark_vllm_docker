@@ -44,12 +44,13 @@ run_remote() {
 check_port() {
   local host="$1"
   local port="$2"
-  local rc
+  local state rc
   # Return 0 when occupied, 1 when free, and 2 when the check itself failed.
-  run_remote "$host" "command -v ss >/dev/null 2>&1 || exit 2; ss -tlnp | grep -q ':${port} ' 2>/dev/null"
+  state=$(run_remote "$host" "command -v ss >/dev/null 2>&1 || { printf error; exit; }; listeners=\$(ss -H -ltn 'sport = :${port}' 2>/dev/null) || { printf error; exit; }; if [ -n \"\$listeners\" ]; then printf occupied; else printf free; fi")
   rc=$?
-  [[ $rc -eq 0 ]] && return 0
-  [[ $rc -eq 1 ]] && return 1
+  [[ $rc -eq 0 ]] || return 2
+  [[ "$state" == "occupied" ]] && return 0
+  [[ "$state" == "free" ]] && return 1
   return 2
 }
 
@@ -58,22 +59,20 @@ check_port() {
 # Returns 0 if media is present, 1 if absent.
 check_media() {
   local host="$1"
-  local rc
+  local state rc
 
   # Check container names
-  run_remote "$host" "command -v docker >/dev/null 2>&1 || exit 2; docker ps --format '{{.Names}}' | grep -qE 'comfyui-spark|comfyui-ollama' 2>/dev/null"
+  state=$(run_remote "$host" "command -v docker >/dev/null 2>&1 || { printf error; exit; }; names=\$(docker ps --format '{{.Names}}' 2>/dev/null) || { printf error; exit; }; if printf '%s\\n' \"\$names\" | grep -qE 'comfyui-spark|comfyui-ollama'; then printf present; else printf absent; fi")
   rc=$?
-  if [[ $rc -eq 0 ]]; then
-    return 0
-  fi
-  [[ $rc -eq 1 ]] || return 2
+  [[ $rc -eq 0 ]] || return 2
+  [[ "$state" == "present" ]] && return 0
+  [[ "$state" == "absent" ]] || return 2
 
   # Check running Python commands for ComfyUI
-  run_remote "$host" "command -v ps >/dev/null 2>&1 || exit 2; ps aux | grep '[c]omfyui' 2>/dev/null"
+  state=$(run_remote "$host" "command -v ps >/dev/null 2>&1 || { printf error; exit; }; processes=\$(ps aux 2>/dev/null) || { printf error; exit; }; if printf '%s\\n' \"\$processes\" | grep '[c]omfyui' >/dev/null; then printf present; else printf absent; fi")
   rc=$?
-  if [[ $rc -eq 0 ]]; then
-    return 0
-  fi
-  [[ $rc -eq 1 ]] && return 1
+  [[ $rc -eq 0 ]] || return 2
+  [[ "$state" == "present" ]] && return 0
+  [[ "$state" == "absent" ]] && return 1
   return 2
 }

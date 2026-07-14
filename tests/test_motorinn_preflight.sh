@@ -107,7 +107,7 @@ if echo "$NORMALIZED_CMD" | grep -q "ping.*169.254"; then
   exit 0
 fi
 
-if echo "$NORMALIZED_CMD" | grep -q "ss -tlnp"; then
+if echo "$NORMALIZED_CMD" | grep -q "ss -H -ltn"; then
   port=""
   case "$NORMALIZED_CMD" in
     *:8000*) port="8000" ;;
@@ -116,10 +116,11 @@ if echo "$NORMALIZED_CMD" | grep -q "ss -tlnp"; then
     *:8265*) port="8265" ;;
   esac
   if [[ -n "$port" ]] && [[ -f "${MOCK_STATE_DIR}/port_${port}" ]]; then
-    echo "LISTEN"
-    exit 0
+    echo "occupied"
+  else
+    echo "free"
   fi
-  exit 1
+  exit 0
 fi
 
 if echo "$NORMALIZED_CMD" | grep -q "free -g"; then
@@ -133,18 +134,20 @@ fi
 
 if echo "$NORMALIZED_CMD" | grep -q "docker ps"; then
   if [[ -f "${MOCK_STATE_DIR}/media_container" ]]; then
-    echo "comfyui-spark"
-    exit 0
+    echo "present"
+  else
+    echo "absent"
   fi
-  exit 1
+  exit 0
 fi
 
 if echo "$NORMALIZED_CMD" | grep -q "ps aux"; then
   if [[ -f "${MOCK_STATE_DIR}/media_ps" ]]; then
-    echo "python comfyui.py"
-    exit 0
+    echo "present"
+  else
+    echo "absent"
   fi
-  exit 1
+  exit 0
 fi
 
 exit 99
