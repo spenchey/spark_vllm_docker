@@ -148,6 +148,19 @@ for host in "${HOSTS[@]}"; do
   fi
 done
 
+# Cross-host index SHA comparison defect fix
+HEAD_INDEX="${HOST_STATUS[${HEAD_HOST}_index_sha256]}"
+WORKER_INDEX="${HOST_STATUS[${WORKER_HOST}_index_sha256]}"
+if [[ -z "$HEAD_INDEX" ]] || [[ "$HEAD_INDEX" == "ERROR" ]] || [[ "$HEAD_INDEX" == "unreachable" ]]; then
+  START_ALLOWED=false
+fi
+if [[ -z "$WORKER_INDEX" ]] || [[ "$WORKER_INDEX" == "ERROR" ]] || [[ "$WORKER_INDEX" == "unreachable" ]]; then
+  START_ALLOWED=false
+fi
+if [[ "$HEAD_INDEX" != "$WORKER_INDEX" ]]; then
+  START_ALLOWED=false
+fi
+
 # Final decision on start_allowed
 if [[ "$MEDIA_BLOCKED" == "true" ]] && [[ "${ALLOW_MEDIA_STOP:-0}" != "1" ]]; then
   START_ALLOWED=false
@@ -176,3 +189,10 @@ if [[ "$MEDIA_BLOCKED" == "true" ]]; then
 fi
 
 echo "start_allowed=${START_ALLOWED}"
+
+# Exit code defect fix: exit 0 only if allowed, else 1
+if [[ "$START_ALLOWED" == "true" ]]; then
+  exit 0
+else
+  exit 1
+fi
