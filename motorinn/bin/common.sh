@@ -22,6 +22,8 @@ SSH_OPTS=(
   -o ConnectTimeout=5
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
+  -o ServerAliveInterval=5
+  -o ServerAliveCountMax=3
 )
 
 # Helper: Run command on remote host via SSH with bounded timeout
@@ -29,8 +31,11 @@ SSH_OPTS=(
 run_remote() {
   local host="$1"
   shift
-  # Use timeout to bound the remote command execution
-  timeout 30 ssh "${SSH_OPTS[@]}" "$host" "$@"
+  # Use remote Linux timeout to bound the command execution.
+  # Safely quote the command string using Bash printf -v with %q before passing it to ssh.
+  local quoted_cmd
+  printf -v quoted_cmd '%q' "$@"
+  timeout 25 bash -lc "${quoted_cmd}"
 }
 
 # Helper: Check if a port is in use on a remote host
