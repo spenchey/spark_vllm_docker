@@ -30,9 +30,9 @@ mkdir -p "${DG_JIT_CACHE_DIR}" "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}
 : "${ROLE:?ROLE must be set to head or worker}"
 
 # ── safe defaults ─────────────────────────────────────────────────────────────
-# These match .env.unholy-fusion; override by setting the variable before launch.
-# MAX_NUM_SEQS ≥ 5 causes CUDA graph capture hang on GB10 — do not raise above 4.
-# MAX_MODEL_LEN=524288 starts OK but crashes at d≥131072 — keep at 262144.
+# These match .env.unholy-fusion; model-specific env profiles override them.
+# DeepSeek V4 Flash DSpark Patch 2B can opt into longer context, higher
+# concurrency, and NVFP4 KV without changing this shared entrypoint again.
 # MTP_NUM_TOKENS=2 causes catastrophic throughput collapse at c≥4.
 : "${DISTRIBUTED_BACKEND:=mp}"
 : "${MAX_MODEL_LEN:=262144}"
@@ -40,6 +40,7 @@ mkdir -p "${DG_JIT_CACHE_DIR}" "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}
 : "${MAX_NUM_BATCHED_TOKENS:=8192}"
 : "${GPU_MEMORY_UTILIZATION:=0.80}"
 : "${MTP_NUM_TOKENS:=1}"
+: "${KV_CACHE_DTYPE:=fp8}"
 
 # The base compose exports optional VLLM_* knobs as empty strings when unset.
 # This unholy-fusion vLLM build parses some of those envs during VllmConfig
@@ -133,11 +134,142 @@ print("[unholy-patch] patch2 (determine_available_memory) applied to " + target)
 PYPATCH2
 fi
 
+# ── GB10 UMA patch 3: fixed-KV startup without dummy profile run ─────────────
+# DeepSeek V4 DSpark can load successfully on 2x Spark and then fail in vLLM's
+# profile_run dummy forward with cudaErrorNotPermitted on the worker. When the
+# operator provides --kv-cache-memory-bytes, allow skipping that profile pass so
+# startup can use the explicit KV budget instead of probing it.
+if [ -f "$GPU_WORKER" ] && ! grep -q "_spark_skip_fixed_kv_profile" "$GPU_WORKER"; then
+  /opt/env/bin/python3 - "$GPU_WORKER" <<'PYPATCH3'
+import sys
+target = sys.argv[1]
+src = open(target).read()
+OLD = '''        if kv_cache_memory_bytes := self.cache_config.kv_cache_memory_bytes:
+            # still need a profile run which compiles the model for
+            # max_num_batched_tokens
+            self.model_runner.profile_run()
+
+            msg = (
+'''
+NEW = '''        if kv_cache_memory_bytes := self.cache_config.kv_cache_memory_bytes:
+            # vllm-spark patch: explicit fixed KV can skip the DSpark dummy
+            # profile run on GB10/Spark when the profile pass itself fails.
+            if __import__("os").environ.get("VLLM_SPARK_SKIP_FIXED_KV_PROFILE_RUN") == "1":
+                logger.warning(
+                    "VLLM_SPARK_SKIP_FIXED_KV_PROFILE_RUN=1 — using explicit "
+                    "kv_cache_memory_bytes without profile_run"
+                )
+            else:
+                # still need a profile run which compiles the model for
+                # max_num_batched_tokens
+                self.model_runner.profile_run()
+
+            msg = (  # _spark_skip_fixed_kv_profile
+'''
+if OLD not in src:
+    print("[unholy-patch] patch3 anchor not found — skipping")
+    sys.exit(0)
+open(target, 'w').write(src.replace(OLD, NEW, 1))
+print("[unholy-patch] patch3 (fixed-KV profile skip) applied to " + target)
+PYPATCH3
+fi
+
+# ── GB10 UMA patch 4: optional DeepSeek V4 mHC warmup skip ───────────────────
+# The older validated DeepSeek V4 GB10 stack removed this warmup. On this DSpark
+# Stage C path it can fail during startup with CUDA_ERROR_NOT_PERMITTED before
+# the API ever opens. Keep the runtime path intact; only skip eager pre-warm.
+KERNEL_WARMUP=/opt/env/lib/python3.12/site-packages/vllm/model_executor/warmup/kernel_warmup.py
+if [ -f "$KERNEL_WARMUP" ] && ! grep -q "_spark_skip_dsv4_mhc_warmup" "$KERNEL_WARMUP"; then
+  /opt/env/bin/python3 - "$KERNEL_WARMUP" <<'PYPATCH4'
+import sys
+target = sys.argv[1]
+src = open(target).read()
+OLD = '''    deepseek_v4_mhc_warmup(
+        worker.get_model(),
+        max_tokens=worker.scheduler_config.max_num_batched_tokens,
+        cudagraph_capture_sizes=(
+            worker.vllm_config.compilation_config.cudagraph_capture_sizes or []
+        ),
+    )
+'''
+NEW = '''    if __import__("os").environ.get("SPARK_SKIP_DEEPSEEK_V4_MHC_WARMUP") == "1":
+        logger.warning(
+            "SPARK_SKIP_DEEPSEEK_V4_MHC_WARMUP=1 — skipping DeepSeek V4 "
+            "mHC startup warmup"
+        )  # _spark_skip_dsv4_mhc_warmup
+    else:
+        deepseek_v4_mhc_warmup(
+            worker.get_model(),
+            max_tokens=worker.scheduler_config.max_num_batched_tokens,
+            cudagraph_capture_sizes=(
+                worker.vllm_config.compilation_config.cudagraph_capture_sizes or []
+            ),
+        )
+'''
+if OLD not in src:
+    print("[unholy-patch] patch4 anchor not found — skipping")
+    sys.exit(0)
+open(target, 'w').write(src.replace(OLD, NEW, 1))
+print("[unholy-patch] patch4 (DeepSeek V4 mHC warmup skip) applied to " + target)
+PYPATCH4
+fi
+
+# ── GB10 UMA patch 5: optional final V1 dummy run skip ───────────────────────
+# After model load, vLLM V1 performs one more sampler/logits dummy run. On the
+# DSpark TP=2 worker this can fail in vocab_parallel_embedding.masked_fill_ with
+# cudaErrorNotPermitted, even after all explicit warmups are disabled. This
+# patch skips only that post-warmup dummy probe when the DSpark profile opts in.
+if [ -f "$GPU_WORKER" ] && ! grep -q "_spark_skip_final_dummy_run" "$GPU_WORKER"; then
+  /opt/env/bin/python3 - "$GPU_WORKER" <<'PYPATCH5'
+import sys
+target = sys.argv[1]
+src = open(target).read()
+OLD = '''            # We skip EPLB here since we don't want to record dummy metrics
+            hidden_states, last_hidden_states = self.model_runner._dummy_run(
+                num_tokens=max_num_reqs,
+                skip_eplb=True,
+                cudagraph_runtime_mode=CUDAGraphMode.NONE,
+            )
+            if self.model_runner.is_pooling_model:
+                self.model_runner._dummy_pooler_run(hidden_states)
+            else:
+                self.model_runner._dummy_sampler_run(hidden_states=last_hidden_states)
+'''
+NEW = '''            # We skip EPLB here since we don't want to record dummy metrics
+            if __import__("os").environ.get("VLLM_SPARK_SKIP_FINAL_DUMMY_RUN") == "1":
+                logger.warning(
+                    "VLLM_SPARK_SKIP_FINAL_DUMMY_RUN=1 — skipping final "
+                    "V1 sampler/logits dummy run"
+                )  # _spark_skip_final_dummy_run
+            else:
+                hidden_states, last_hidden_states = self.model_runner._dummy_run(
+                    num_tokens=max_num_reqs,
+                    skip_eplb=True,
+                    cudagraph_runtime_mode=CUDAGraphMode.NONE,
+                )
+                if self.model_runner.is_pooling_model:
+                    self.model_runner._dummy_pooler_run(hidden_states)
+                else:
+                    self.model_runner._dummy_sampler_run(hidden_states=last_hidden_states)
+'''
+if OLD not in src:
+    print("[unholy-patch] patch5 anchor not found — skipping")
+    sys.exit(0)
+open(target, 'w').write(src.replace(OLD, NEW, 1))
+print("[unholy-patch] patch5 (final dummy run skip) applied to " + target)
+PYPATCH5
+fi
+
 EXTRA_ARGS=()
 if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
   # Experimental-only escape hatch for vLLM CLI flags. Keep values simple:
   # whitespace-delimited flags are supported, shell quoting is intentionally not.
   read -r -a EXTRA_ARGS <<< "${VLLM_EXTRA_ARGS}"
+fi
+
+FLASHINFER_AUTOTUNE_ARGS=(--enable-flashinfer-autotune)
+if [ "${SPARK_ENABLE_FLASHINFER_AUTOTUNE:-1}" = "0" ]; then
+  FLASHINFER_AUTOTUNE_ARGS=(--no-enable-flashinfer-autotune)
 fi
 
 # ── ROLE=worker dispatch ─────────────────────────────────────────────────────
@@ -149,7 +281,7 @@ if [ "${ROLE}" = "worker" ]; then
     --host 0.0.0.0 --port "${HOST_PORT:-8000}" \
     --trust-remote-code \
     --tensor-parallel-size "${TP_SIZE:-2}" \
-    --kv-cache-dtype fp8 \
+    --kv-cache-dtype "${KV_CACHE_DTYPE}" \
     --block-size 256 \
     --max-model-len "${MAX_MODEL_LEN}" \
     --max-num-seqs "${MAX_NUM_SEQS}" \
@@ -163,7 +295,7 @@ if [ "${ROLE}" = "worker" ]; then
     --reasoning-parser deepseek_v4 \
     --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"<think>","reasoning_end_str":"</think>"}' \
     --default-chat-template-kwargs '{"thinking":true}' \
-    --enable-flashinfer-autotune \
+    "${FLASHINFER_AUTOTUNE_ARGS[@]}" \
     --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP_NUM_TOKENS}}" \
     --nnodes 2 \
     --node-rank "${NODE_RANK}" \
@@ -181,7 +313,7 @@ exec vllm serve "${MODEL_CONTAINER_PATH}" \
   --host 0.0.0.0 --port "${HOST_PORT:-8000}" \
   --trust-remote-code \
   --tensor-parallel-size "${TP_SIZE:-2}" \
-  --kv-cache-dtype fp8 \
+  --kv-cache-dtype "${KV_CACHE_DTYPE}" \
   --block-size 256 \
   --max-model-len "${MAX_MODEL_LEN}" \
   --max-num-seqs "${MAX_NUM_SEQS}" \
@@ -195,10 +327,11 @@ exec vllm serve "${MODEL_CONTAINER_PATH}" \
   --reasoning-parser deepseek_v4 \
   --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"<think>","reasoning_end_str":"</think>"}' \
   --default-chat-template-kwargs '{"thinking":true}' \
-  --enable-flashinfer-autotune \
+  "${FLASHINFER_AUTOTUNE_ARGS[@]}" \
   --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP_NUM_TOKENS}}" \
   --nnodes 2 \
   --node-rank "${NODE_RANK}" \
   --master-addr "${HEAD_ROCE_IP}" \
   --master-port "${MASTER_PORT:-25000}" \
   "${EXTRA_ARGS[@]}"
+
