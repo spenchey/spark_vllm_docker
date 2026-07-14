@@ -44,11 +44,43 @@ echo "--- Checking bash syntax ---"
 bash -n "${ENTRYPOINT_FILE}" || log_fail "entrypoint.unholy.sh has syntax errors"
 bash -n "${TEST_SCRIPT}" || log_fail "test script has syntax errors"
 
-# 2. Check that only allowed paths are modified (simulated by checking existence)
+# 2. Check that only allowed paths are modified
 echo "--- Checking allowed paths ---"
-for path in "${ALLOWED_PATHS[@]}"; do
-  if [ ! -f "${ROOT_DIR}/${path}" ]; then
-    log_fail "Allowed file missing: ${path}"
+CHANGED_PATHS=()
+if git rev-parse --git-dir > /dev/null 2>&1; then
+  # Get changed files from base commit
+  while IFS= read -r line; do
+    CHANGED_PATHS+=("$line")
+  done < <(git diff --name-only bc334dd3e3770b3f7e9015d215f2ab3f65af4497 2>/dev/null || true)
+
+  # Get untracked files
+  while IFS= read -r line; do
+    CHANGED_PATHS+=("$line")
+  done < <(git ls-files --others --exclude-standard 2>/dev/null || true)
+else
+  # Fallback: if not in git, assume no changes (or handle as needed, but spec implies git context)
+  : # No paths changed if not in repo
+fi
+
+# Sort and unique the changed paths
+UNIQUE_CHANGED_PATHS=()
+if [ ${#CHANGED_PATHS[@]} -gt 0 ]; then
+  while IFS= read -r line; do
+    UNIQUE_CHANGED_PATHS+=("$line")
+  done < <(printf '%s\n' "${CHANGED_PATHS[@]}" | sort -u)
+fi
+
+# Check for any path outside allowed paths
+for path in "${UNIQUE_CHANGED_PATHS[@]}"; do
+  allowed=0
+  for allowed_path in "${ALLOWED_PATHS[@]}"; do
+    if [ "$path" = "$allowed_path" ]; then
+      allowed=1
+      break
+    fi
+  done
+  if [ $allowed -eq 0 ]; then
+    log_fail "Unexpected path changed: ${path}"
   fi
 done
 
@@ -128,19 +160,52 @@ fi
 
 # 7. Check that environment file variables are consumed by entrypoint
 echo "--- Checking variable consumption ---"
-ENV_VARS=$(grep -E '^[A-Z_]+=' "${ENV_FILE}" | cut -d'=' -f1)
-for var in ${ENV_VARS}; do
-  # Skip image and hash as they are not directly consumed as env vars in the same way
-  if [[ "${var}" == "VLLM_IMAGE" || "${var}" == "EXPECTED_IMAGE_ID" ]]; then
-    continue
-  fi
-  # Check if the variable is referenced in the entrypoint (either as ${VAR} or ${VAR:-default})
-  if grep -qE "\$\{${var}(:-[^}]*)?\}" "${ENTRYPOINT_FILE}"; then
-    log_pass "Entrypoint consumes ${var}"
-  else
-    log_fail "Entrypoint missing reference to ${var}"
-  fi
-done
+# Only check references on added lines in the diff for compose and entrypoint
+ADDED_COMPOSE_VARS=()
+ADDED_ENTRYPOINT_VARS=()
+
+if git rev-parse --git-dir > /dev/null 2>&1; then
+  # Get added lines in docker-compose.yml
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^\+ ]]; then
+      # Extract variable references like ${VAR} or ${VAR:-...}
+      refs=$(echo "$line" | grep -oE '\$\{[A-Z_]+(:-[^}]*)?\}' || true)
+      for ref in $refs; do
+        var_name=$(echo "$ref" | sed 's/\${//; s/:.*//')
+        ADDED_COMPOSE_VARS+=("$var_name")
+      done
+    fi
+  done < <(git diff bc334dd3e3770b3f7e9015d215f2ab3f65af4497 -- "${COMPOSE_FILE#*/}" 2>/dev/null || true)
+
+  # Get added lines in entrypoint.unholy.sh
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^\+ ]]; then
+      refs=$(echo "$line" | grep -oE '\$\{[A-Z_]+(:-[^}]*)?\}' || true)
+      for ref in $refs; do
+        var_name=$(echo "$ref" | sed 's/\${//; s/:.*//')
+        ADDED_ENTRYPOINT_VARS+=("$var_name")
+      done
+    fi
+  done < <(git diff bc334dd3e3770b3f7e9015d215f2ab3f65af4497 -- "${ENTRYPOINT_FILE#*/}" 2>/dev/null || true)
+fi
+
+# Combine all added vars to check against env file
+ALL_ADDED_VARS=()
+for v in "${ADDED_COMPOSE_VARS[@]}"; do ALL_ADDED_VARS+=("$v"); done
+for v in "${ADDED_ENTRYPOINT_VARS[@]}"; do ALL_ADDED_VARS+=("$v"); done
+
+# Check that each added var has a matching KEY= line in the env file
+if [ ${#ALL_ADDED_VARS[@]} -gt 0 ]; then
+  for var in "${ALL_ADDED_VARS[@]}"; do
+    if grep -qE "^${var}=" "${ENV_FILE}"; then
+      log_pass "Env file contains key for added ref: ${var}"
+    else
+      log_fail "Env file missing key for added ref: ${var}"
+    fi
+  done
+else
+  log_pass "No new variable references added in diff"
+fi
 
 echo "=============================="
 if [ ${FAILED} -eq 0 ]; then
