@@ -12,8 +12,17 @@ TEST_SCRIPT="${BASH_SOURCE[0]}"
 ALLOWED_PATHS=(
   "docker-compose.yml"
   "entrypoints/entrypoint.unholy.sh"
+  "motorinn/bin/common.sh"
+  "motorinn/bin/preflight.sh"
+  "motorinn/bin/start-dspark-tp2.sh"
+  "motorinn/bin/status.sh"
+  "motorinn/bin/stop-vllm-spark.sh"
+  "motorinn/bin/verify-dspark-model-cache.sh"
   "motorinn/env/deepseek-v4-flash-dspark-tp2.env"
+  "tests/test_motorinn_preflight.sh"
+  "tests/test_motorinn_runtime.sh"
   "tests/test_motorinn_runtime_config.sh"
+  "tests/test_motorinn_runtime_control.sh"
 )
 
 # Forbidden patterns for secrets/tokens
