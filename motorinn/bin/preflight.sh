@@ -31,27 +31,34 @@ for host in "${HOSTS[@]}"; do
   ports_free="true"
   
   # 1. Check SSH connectivity and get runtime SHA
-  if ! runtime_sha=$(run_remote "$host" "cd ${RELEASE_PATH} && git rev-parse HEAD 2>/dev/null || echo 'ERROR'" 2>/dev/null); then
-    # SSH failed or command failed
+  # Capture git HEAD and status separately
+  local_git_head=$(run_remote "$host" "cd ${RELEASE_PATH} && git rev-parse HEAD 2>/dev/null || echo 'ERROR'" 2>/dev/null) || { dirty="true"; local_git_head="unreachable"; }
+  local_git_status=$(run_remote "$host" "cd ${RELEASE_PATH} && git status --porcelain 2>/dev/null || echo 'ERROR'" 2>/dev/null) || { dirty="true"; local_git_status="unreachable"; }
+
+  if [[ "$local_git_head" == "ERROR" ]] || [[ "$local_git_head" == "unreachable" ]]; then
     dirty="true"
     runtime_sha="unreachable"
+  elif [[ "$local_git_head" != "${EXPECTED_RUNTIME_SHA}" ]]; then
+    dirty="true"
+    runtime_sha="$local_git_head"
   else
-    if [[ "$runtime_sha" == "ERROR" ]]; then
-      dirty="true"
-      runtime_sha="invalid"
-    elif [[ "$runtime_sha" != "${EXPECTED_RUNTIME_SHA}" ]]; then
-      dirty="true"
-    fi
+    runtime_sha="$local_git_head"
   fi
 
-  # 2. Check Image ID
-  if ! image_id=$(run_remote "$host" "docker inspect --format='{{.Id}}' $(docker ps -q --filter 'ancestor=spark_vllm_docker' | head -1) 2>/dev/null || echo 'ERROR'" 2>/dev/null); then
-    # Try to get image ID from running container if possible, or just check if docker works
-    # If we can't get it, assume mismatch for safety in fail-closed
+  # Dirty means any status output
+  if [[ -n "$local_git_status" ]] && [[ "$local_git_status" != "unreachable" ]]; then
+    dirty="true"
+  fi
+
+  # 2. Check Image ID (Local image tag, not running container)
+  # We inspect the local image tag vllm-dspark-runtime:dspark-nvfp4-stage-c
+  if ! image_id=$(run_remote "$host" "docker image inspect --format='{{.Id}}' vllm-dspark-runtime:dspark-nvfp4-stage-c 2>/dev/null || echo 'ERROR'" 2>/dev/null); then
     image_id="unreachable"
     dirty="true"
   else
-    if [[ "$image_id" != "${EXPECTED_IMAGE_ID}" ]]; then
+    if [[ "$image_id" == "ERROR" ]]; then
+      dirty="true"
+    elif [[ "$image_id" != "${EXPECTED_IMAGE_ID}" ]]; then
       dirty="true"
     fi
   fi
@@ -103,12 +110,13 @@ for host in "${HOSTS[@]}"; do
     fi
   done
 
-  # 7. Check Memory
+  # 7. Check Memory (Numeric available memory >=110)
   if ! available_memory_gib=$(run_remote "$host" "free -g | awk '/Mem:/ {print \$7}'" 2>/dev/null); then
     available_memory_gib=0
     dirty="true"
   fi
   
+  # Ensure numeric comparison
   if [[ ${available_memory_gib} -lt ${MIN_MEMORY_GIB} ]]; then
     dirty="true"
   fi
@@ -161,5 +169,10 @@ for host in "${HOSTS[@]}"; do
   echo "ports_free=${HOST_STATUS[${host}_ports_free]}"
   echo "---"
 done
+
+# If media exists, print blocked_media_in_use
+if [[ "$MEDIA_BLOCKED" == "true" ]]; then
+  echo "blocked_media_in_use=true"
+fi
 
 echo "start_allowed=${START_ALLOWED}"

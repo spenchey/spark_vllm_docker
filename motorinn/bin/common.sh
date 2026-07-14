@@ -19,17 +19,18 @@ export SHARD_COUNT="${SHARD_COUNT:-48}"
 # SSH Options for BatchMode and timeouts
 SSH_OPTS=(
   -o BatchMode=yes
-  -o ConnectTimeout=10
+  -o ConnectTimeout=5
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
 )
 
-# Helper: Run command on remote host via SSH
+# Helper: Run command on remote host via SSH with bounded timeout
 # Args: $1=host, $2=command
 run_remote() {
   local host="$1"
   shift
-  ssh "${SSH_OPTS[@]}" "$host" "$@"
+  # Use timeout to bound the remote command execution
+  timeout 30 ssh "${SSH_OPTS[@]}" "$host" "$@"
 }
 
 # Helper: Check if a port is in use on a remote host
@@ -37,7 +38,7 @@ run_remote() {
 check_port() {
   local host="$1"
   local port="$2"
-  # Use ss or netstat; prefer ss for modern systems, fallback to netstat
+  # Use ss to check for listening ports. Return 0 if in use, 1 if free.
   if run_remote "$host" "ss -tlnp | grep -q ':${port} ' 2>/dev/null"; then
     return 0 # Port is in use
   else
@@ -47,19 +48,19 @@ check_port() {
 
 # Helper: Check for media processes on remote host
 # Args: $1=host
+# Returns 0 if media is present, 1 if absent.
 check_media() {
   local host="$1"
-  local found=0
   
   # Check container names
   if run_remote "$host" "docker ps --format '{{.Names}}' | grep -qE 'comfyui-spark|comfyui-ollama' 2>/dev/null"; then
-    found=1
+    return 0
   fi
   
   # Check running Python commands for ComfyUI
   if run_remote "$host" "ps aux | grep '[c]omfyui' 2>/dev/null"; then
-    found=1
+    return 0
   fi
   
-  return $found
+  return 1
 }

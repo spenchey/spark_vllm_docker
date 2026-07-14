@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test_motorinn_preflight.sh - Regression tests for MOT-2457 preflight
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${SCRIPT_DIR}/../motorinn/bin"
@@ -11,24 +11,21 @@ echo "Running MOT-2457 Preflight Tests..."
 run_preflight() {
   local env_vars="$1"
   shift
-  # We will mock the commands that would normally fail or succeed
-  # by creating a temporary directory structure and mocking ssh/ss/ping/free/docker
+  
+  # Create isolated temporary fixture
   local tmp_dir=$(mktemp -d)
   
-  # Create mock commands
+  # Create mock commands directory
   mkdir -p "${tmp_dir}/bin"
   
   # Mock SSH to simulate success/failure based on args
   cat > "${tmp_dir}/bin/ssh" << 'EOF'
 #!/usr/bin/env bash
 # Mock SSH
-# Check if we are simulating a failure
 if [[ -f /tmp/mock_ssh_fail ]]; then
   exit 1
 fi
 
-# Parse command to determine behavior
-# We look for specific patterns in the command passed
 local cmd="$*"
 
 # Simulate git rev-parse HEAD
@@ -37,6 +34,16 @@ if echo "$cmd" | grep -q "git rev-parse HEAD"; then
     cat /tmp/mock_git_sha
   else
     echo "899e7ce7bbea4b2745e5981e45c11e02df80892f"
+  fi
+  exit 0
+fi
+
+# Simulate git status --porcelain
+if echo "$cmd" | grep -q "git status --porcelain"; then
+  if [[ -f /tmp/mock_git_dirty ]]; then
+    cat /tmp/mock_git_dirty
+  else
+    echo ""
   fi
   exit 0
 fi
@@ -91,7 +98,6 @@ fi
 
 # Simulate ss port check
 if echo "$cmd" | grep -q "ss -tlnp"; then
-  # Check which port is being checked
   local port=$(echo "$cmd" | grep -oP ':\K[0-9]+')
   if [[ -f "/tmp/mock_port_${port}" ]]; then
     echo "LISTEN"
@@ -100,12 +106,12 @@ if echo "$cmd" | grep -q "ss -tlnp"; then
   exit 1
 fi
 
-# Simulate free -g
+# Simulate free -g (provide numeric seventh field)
 if echo "$cmd" | grep -q "free -g"; then
   if [[ -f /tmp/mock_memory_low ]]; then
-    echo "Mem:       50G"
+    echo "Mem:       50G          10G         40G         0G        50G"
   else
-    echo "Mem:      256G"
+    echo "Mem:      256G         10G        246G         0G       246G"
   fi
   exit 0
 fi
@@ -135,7 +141,6 @@ EOF
   # Mock ss
   cat > "${tmp_dir}/bin/ss" << 'EOF'
 #!/usr/bin/env bash
-# Mock ss - always returns empty unless port is mocked
 exit 1
 EOF
   chmod +x "${tmp_dir}/bin/ss"
@@ -172,7 +177,7 @@ cleanup_mocks() {
 # Test 1: Pass (All clean)
 echo "Test 1: Pass (All clean)"
 cleanup_mocks
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0")
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=true"; then
   echo "PASS: Test 1"
 else
@@ -185,7 +190,7 @@ fi
 echo "Test 2: SSH Failure"
 cleanup_mocks
 touch /tmp/mock_ssh_fail
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true # Expect failure or dirty status
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=false"; then
   echo "PASS: Test 2"
 else
@@ -199,7 +204,8 @@ cleanup_mocks
 echo "Test 3: Dirty Repo"
 cleanup_mocks
 echo "badsha" > /tmp/mock_git_sha
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0")
+echo " M file.txt" > /tmp/mock_git_dirty
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=false"; then
   echo "PASS: Test 3"
 else
@@ -213,7 +219,7 @@ cleanup_mocks
 echo "Test 4: Shard Mismatch"
 cleanup_mocks
 echo "47" > /tmp/mock_shard_count
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0")
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=false"; then
   echo "PASS: Test 4"
 else
@@ -227,7 +233,7 @@ cleanup_mocks
 echo "Test 5: Index SHA Mismatch"
 cleanup_mocks
 echo "badindex" > /tmp/mock_index_sha
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0")
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=false"; then
   echo "PASS: Test 5"
 else
@@ -241,7 +247,7 @@ cleanup_mocks
 echo "Test 6: Image ID Mismatch"
 cleanup_mocks
 echo "sha256:badimage" > /tmp/mock_image_id
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0")
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=false"; then
   echo "PASS: Test 6"
 else
@@ -255,7 +261,7 @@ cleanup_mocks
 echo "Test 7: RDMA Down"
 cleanup_mocks
 touch /tmp/mock_rdma_down
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0")
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=false"; then
   echo "PASS: Test 7"
 else
@@ -269,7 +275,7 @@ cleanup_mocks
 echo "Test 8: Peer Failure"
 cleanup_mocks
 touch /tmp/mock_peer_fail
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0")
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=false"; then
   echo "PASS: Test 8"
 else
@@ -283,7 +289,7 @@ cleanup_mocks
 echo "Test 9: Occupied Port"
 cleanup_mocks
 touch /tmp/mock_port_8000
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0")
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=false"; then
   echo "PASS: Test 9"
 else
@@ -297,7 +303,7 @@ cleanup_mocks
 echo "Test 10: Low Memory"
 cleanup_mocks
 touch /tmp/mock_memory_low
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0")
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=false"; then
   echo "PASS: Test 10"
 else
@@ -311,7 +317,7 @@ cleanup_mocks
 echo "Test 11: Media Blocked"
 cleanup_mocks
 touch /tmp/mock_media
-output=$(run_preflight "export ALLOW_MEDIA_STOP=0")
+output=$(run_preflight "export ALLOW_MEDIA_STOP=0") || true
 if echo "$output" | grep -q "start_allowed=false"; then
   echo "PASS: Test 11"
 else
@@ -325,7 +331,7 @@ cleanup_mocks
 echo "Test 12: Media Override"
 cleanup_mocks
 touch /tmp/mock_media
-output=$(run_preflight "export ALLOW_MEDIA_STOP=1")
+output=$(run_preflight "export ALLOW_MEDIA_STOP=1") || true
 if echo "$output" | grep -q "start_allowed=true"; then
   echo "PASS: Test 12"
 else

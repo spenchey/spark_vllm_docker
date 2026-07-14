@@ -16,8 +16,8 @@ if [[ ! -d "${LOCAL_MODEL_PATH}" ]]; then
   exit 1
 fi
 
-# Check shard count
-shard_count=$(find "${LOCAL_MODEL_PATH}" -name '*.safetensors' | wc -l)
+# Check shard count (top-level)
+shard_count=$(find "${LOCAL_MODEL_PATH}" -maxdepth 1 -name '*.safetensors' | wc -l)
 if [[ ${shard_count} -ne ${SHARD_COUNT} ]]; then
   echo "FAIL: Shard count mismatch. Expected ${SHARD_COUNT}, got ${shard_count}"
   exit 1
@@ -30,5 +30,5 @@ if [[ ! -f "${LOCAL_MODEL_PATH}/model.safetensors.index.json" ]]; then
 fi
 
 index_sha256=$(sha256sum "${LOCAL_MODEL_PATH}/model.safetensors.index.json" | awk '{print $1}')
-echo "PASS: Local model cache verified. Index SHA: ${index_sha256}"
+echo "PASS: Local model cache verified. shard_count=${shard_count} index_sha256=${index_sha256}"
 exit 0
