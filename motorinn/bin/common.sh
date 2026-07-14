@@ -44,12 +44,13 @@ run_remote() {
 check_port() {
   local host="$1"
   local port="$2"
-  # Use ss to check for listening ports. Return 0 if in use, 1 if free.
-  if run_remote "$host" "ss -tlnp | grep -q ':${port} ' 2>/dev/null"; then
-    return 0 # Port is in use
-  else
-    return 1 # Port is free
-  fi
+  local rc
+  # Return 0 when occupied, 1 when free, and 2 when the check itself failed.
+  run_remote "$host" "command -v ss >/dev/null 2>&1 || exit 2; ss -tlnp | grep -q ':${port} ' 2>/dev/null"
+  rc=$?
+  [[ $rc -eq 0 ]] && return 0
+  [[ $rc -eq 1 ]] && return 1
+  return 2
 }
 
 # Helper: Check for media processes on remote host
@@ -57,16 +58,22 @@ check_port() {
 # Returns 0 if media is present, 1 if absent.
 check_media() {
   local host="$1"
-  
+  local rc
+
   # Check container names
-  if run_remote "$host" "docker ps --format '{{.Names}}' | grep -qE 'comfyui-spark|comfyui-ollama' 2>/dev/null"; then
+  run_remote "$host" "command -v docker >/dev/null 2>&1 || exit 2; docker ps --format '{{.Names}}' | grep -qE 'comfyui-spark|comfyui-ollama' 2>/dev/null"
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
     return 0
   fi
-  
+  [[ $rc -eq 1 ]] || return 2
+
   # Check running Python commands for ComfyUI
-  if run_remote "$host" "ps aux | grep '[c]omfyui' 2>/dev/null"; then
+  run_remote "$host" "command -v ps >/dev/null 2>&1 || exit 2; ps aux | grep '[c]omfyui' 2>/dev/null"
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
     return 0
   fi
-  
-  return 1
+  [[ $rc -eq 1 ]] && return 1
+  return 2
 }

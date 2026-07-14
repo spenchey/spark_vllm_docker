@@ -124,6 +124,12 @@ for (( i=0; i<NUM_HOSTS; i++ )); do
     if check_port "$host" "$port"; then
       local_ports_free="false"
       local_dirty="true"
+    else
+      port_check_rc=$?
+      if [[ $port_check_rc -ne 1 ]]; then
+        local_ports_free="false"
+        local_dirty="true"
+      fi
     fi
   done
 
@@ -149,7 +155,13 @@ for (( i=0; i<NUM_HOSTS; i++ )); do
     local_media_state="blocked"
     MEDIA_BLOCKED=true
   else
-    local_media_state="none"
+    media_check_rc=$?
+    if [[ $media_check_rc -eq 1 ]]; then
+      local_media_state="none"
+    else
+      local_media_state="unknown"
+      local_dirty="true"
+    fi
   fi
 
   # Store status for this host index
