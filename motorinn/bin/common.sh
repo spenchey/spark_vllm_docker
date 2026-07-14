@@ -5,6 +5,7 @@ set -euo pipefail
 # Defaults (environment-overridable)
 export HEAD_HOST="${HEAD_HOST:-spark-2e61}"
 export WORKER_HOST="${WORKER_HOST:-spark-cb87}"
+export SSH_USER="${SSH_USER:-spenchey}"
 export RELEASE_PATH="${RELEASE_PATH:-/home/spenchey/apps/spark_vllm_docker}"
 export EXPECTED_RUNTIME_SHA="${EXPECTED_RUNTIME_SHA:-899e7ce7bbea4b2745e5981e45c11e02df80892f}"
 export EXPECTED_IMAGE_ID="${EXPECTED_IMAGE_ID:-sha256:85e1650f6c5cf0d694896f1085b24b585412cdd60d2b93d310d48b9f20a986da}"
@@ -31,12 +32,16 @@ SSH_OPTS=(
 run_remote() {
   local host="$1"
   shift
+  local target="$host"
+  if [[ "$target" != *@* ]]; then
+    target="${SSH_USER}@${target}"
+  fi
   # Join remaining arguments into a single command string
   local command="$*"
   # Safely quote the command string using Bash printf -v with %q before passing it to ssh.
   local quoted_cmd
   printf -v quoted_cmd '%q' "$command"
-  ssh "${SSH_OPTS[@]}" "$host" "timeout 25s bash -lc ${quoted_cmd}"
+  ssh "${SSH_OPTS[@]}" "$target" "timeout 25s bash -lc ${quoted_cmd}"
 }
 
 # Helper: Check if a port is in use on a remote host
