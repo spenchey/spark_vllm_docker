@@ -136,8 +136,8 @@ for (( i=0; i<NUM_HOSTS; i++ )); do
     local_dirty="true"
   fi
 
-  # 6. Check Ports (8000, 29500, 6379, 8265)
-  for port in 8000 29500 6379 8265; do
+  # 6. Check the DSpark API and cluster coordination ports.
+  for port in "${RUNTIME_PORT}" 29500 6379 8265; do
     if check_port "$host" "$port"; then
       local_ports_free="false"
       local_dirty="true"

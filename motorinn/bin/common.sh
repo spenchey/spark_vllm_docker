@@ -18,6 +18,7 @@ export HEAD_IP="${HEAD_IP:-169.254.135.115}"
 export WORKER_IP="${WORKER_IP:-169.254.114.39}"
 export MIN_MEMORY_GIB="${MIN_MEMORY_GIB:-110}"
 export SHARD_COUNT="${SHARD_COUNT:-48}"
+export RUNTIME_PORT="${RUNTIME_PORT:-8888}"
 
 # SSH Options for BatchMode and timeouts
 SSH_OPTS=(

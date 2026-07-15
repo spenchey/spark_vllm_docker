@@ -31,6 +31,7 @@ cat > "$BIN/common.sh" <<'EOF'
 HEAD_HOST="fake-head-host"
 WORKER_HOST="fake-worker-host"
 RELEASE_PATH="/tmp/fake-release"
+RUNTIME_PORT="8888"
 run_remote() {
   printf 'remote|%s|%s\n' "$1" "$2" >> "$CALL_LOG"
   case "$2" in
@@ -40,7 +41,7 @@ run_remote() {
     *"--profile head up -d head"*)
       [ "${TEST_REMOTE_FAILURE:-}" != "head_start" ]
       ;;
-    *"curl -fsS --max-time 5 http://127.0.0.1:8000/health"*)
+    *"curl -fsS --max-time 5 http://127.0.0.1:8888/health"*)
       [ "${TEST_HEALTH_STATE:-success}" = "success" ]
       ;;
     *"vllm-spark-head vllm-dspark-head vllm-head"*)
@@ -192,7 +193,7 @@ expect_output_line "runtime_started=true" "runtime started message"
 expect_log_contains "remote|fake-worker-host|cd /tmp/fake-release && docker compose --env-file motorinn/env/deepseek-v4-flash-dspark-tp2.env --profile worker up -d worker" "exact worker start"
 expect_log_contains "sleep|25" "exact worker warmup"
 expect_log_contains "remote|fake-head-host|cd /tmp/fake-release && docker compose --env-file motorinn/env/deepseek-v4-flash-dspark-tp2.env --profile head up -d head" "exact head start"
-expect_log_contains "remote|fake-head-host|curl -fsS --max-time 5 http://127.0.0.1:8000/health" "bounded health check"
+expect_log_contains "remote|fake-head-host|curl -fsS --max-time 5 http://127.0.0.1:8888/health" "bounded health check"
 worker_line=$(grep -nF -- "--profile worker up -d worker" "$CALL_LOG" | head -1 | cut -d: -f1)
 sleep_line=$(grep -nF "sleep|25" "$CALL_LOG" | head -1 | cut -d: -f1)
 head_line=$(grep -nF -- "--profile head up -d head" "$CALL_LOG" | head -1 | cut -d: -f1)

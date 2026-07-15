@@ -121,7 +121,7 @@ check_env_val "VLLM_IMAGE" "vllm-dspark-runtime:dspark-nvfp4-stage-c"
 check_env_val "EXPECTED_IMAGE_ID" "sha256:85e1650f6c5cf0d694896f1085b24b585412cdd60d2b93d310d48b9f20a986da"
 check_env_val "MODEL_PATH" "/home/spenchey/models/huggingface/deepseek-ai__DeepSeek-V4-Flash-DSpark"
 check_env_val "SERVED_MODEL_NAME" "deepseek-v4-flash-dspark"
-check_env_val "HOST_PORT" "8000"
+check_env_val "HOST_PORT" "8888"
 check_env_val "MAX_MODEL_LEN" "262144"
 check_env_val "TP_SIZE" "2"
 
