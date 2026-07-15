@@ -215,6 +215,7 @@ fi
 # Check that each added var has a matching KEY= line in the env file
 if [ -n "$ALL_ADDED_VARS_STR" ]; then
   while IFS= read -r var; do
+    [ -n "$var" ] || continue
     if grep -qE "^${var}=" "${ENV_FILE}"; then
       log_pass "Env file contains key for added ref: ${var}"
     else
@@ -242,6 +243,15 @@ check_env_val "NCCL_CROSS_NIC" "1"
 check_env_val "NCCL_CUMEM_ENABLE" "0"
 check_env_val "NCCL_IGNORE_CPU_AFFINITY" "1"
 check_env_val "NCCL_NVLS_ENABLE" "0"
+check_env_val "DG_JIT_USE_NVRTC" "0"
+check_env_val "DG_JIT_NVCC_COMPILER" "/opt/env/bin/nvcc"
+check_env_val "TILELANG_CLEANUP_TEMP_FILES" "1"
+
+if grep -q 'deepgemm-cache-motorinn-v1-rank' "${ROOT_DIR}/${ENTRYPOINT_FILE}"; then
+  log_pass "Entrypoint uses a versioned DeepGEMM cache namespace"
+else
+  log_fail "Entrypoint must not reuse failed DeepGEMM cache artifacts"
+fi
 
 echo "=============================="
 if [ ${FAILED} -eq 0 ]; then
