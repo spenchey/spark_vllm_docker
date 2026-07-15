@@ -235,6 +235,8 @@ check_env_val "MASTER_PORT" "29500"
 check_env_val "MAX_NUM_SEQS" "1"
 check_env_val "GPU_MEMORY_UTILIZATION" "0.80"
 check_env_val "MAX_NUM_BATCHED_TOKENS" "8192"
+check_env_val "TORCH_CUDA_ARCH_LIST" "12.1a"
+check_env_val "FLASHINFER_CUDA_ARCH_LIST" "12.1a"
 
 echo "=============================="
 if [ ${FAILED} -eq 0 ]; then
