@@ -259,6 +259,12 @@ else
   log_fail "Both DSpark rank commands must use --enforce-eager"
 fi
 
+if [ "$(grep -c '^[[:space:]]*privileged: true$' "${ROOT_DIR}/${COMPOSE_FILE}")" -eq 2 ]; then
+  log_pass "Both DSpark ranks have the validated CUDA JIT permissions"
+else
+  log_fail "Both DSpark services must be privileged for DeepGEMM JIT"
+fi
+
 echo "=============================="
 if [ ${FAILED} -eq 0 ]; then
   echo "All tests passed."
