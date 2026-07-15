@@ -21,7 +21,7 @@ export VLLM_NCCL_SO_PATH="${VLLM_NCCL_SO_PATH:-/opt/env/lib/python3.12/site-pack
 
 # ── persistent JIT cache dirs ────────────────────────────────────────────────
 export HF_HOME="/cache/huggingface"
-export DG_JIT_CACHE_DIR="/cache/huggingface/deepgemm-cache-rank${NODE_RANK:-0}"
+export DG_JIT_CACHE_DIR="/cache/huggingface/deepgemm-cache-motorinn-v1-rank${NODE_RANK:-0}"
 export TRITON_CACHE_DIR="/cache/huggingface/triton-cache-rank${NODE_RANK:-0}"
 export TORCHINDUCTOR_CACHE_DIR="/cache/huggingface/torchinductor-rank${NODE_RANK:-0}"
 export VLLM_CACHE_ROOT="/cache/huggingface/vllm-cache"
@@ -148,6 +148,7 @@ if [ "${ROLE}" = "worker" ]; then
     --served-model-name "${SERVED_MODEL_NAME}" \
     --host 0.0.0.0 --port "${HOST_PORT:-8000}" \
     --trust-remote-code \
+    --enforce-eager \
     --tensor-parallel-size "${TP_SIZE:-2}" \
     --kv-cache-dtype fp8 \
     --block-size 256 \
@@ -180,6 +181,7 @@ exec vllm serve "${MODEL_CONTAINER_PATH}" \
   --served-model-name "${SERVED_MODEL_NAME}" \
   --host 0.0.0.0 --port "${HOST_PORT:-8000}" \
   --trust-remote-code \
+  --enforce-eager \
   --tensor-parallel-size "${TP_SIZE:-2}" \
   --kv-cache-dtype fp8 \
   --block-size 256 \

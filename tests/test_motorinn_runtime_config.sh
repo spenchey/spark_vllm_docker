@@ -121,7 +121,7 @@ check_env_val "VLLM_IMAGE" "vllm-dspark-runtime:dspark-nvfp4-stage-c"
 check_env_val "EXPECTED_IMAGE_ID" "sha256:85e1650f6c5cf0d694896f1085b24b585412cdd60d2b93d310d48b9f20a986da"
 check_env_val "MODEL_PATH" "/home/spenchey/models/huggingface/deepseek-ai__DeepSeek-V4-Flash-DSpark"
 check_env_val "SERVED_MODEL_NAME" "deepseek-v4-flash-dspark"
-check_env_val "HOST_PORT" "8000"
+check_env_val "HOST_PORT" "8888"
 check_env_val "MAX_MODEL_LEN" "262144"
 check_env_val "TP_SIZE" "2"
 
@@ -215,6 +215,7 @@ fi
 # Check that each added var has a matching KEY= line in the env file
 if [ -n "$ALL_ADDED_VARS_STR" ]; then
   while IFS= read -r var; do
+    [ -n "$var" ] || continue
     if grep -qE "^${var}=" "${ENV_FILE}"; then
       log_pass "Env file contains key for added ref: ${var}"
     else
@@ -235,6 +236,34 @@ check_env_val "MASTER_PORT" "29500"
 check_env_val "MAX_NUM_SEQS" "1"
 check_env_val "GPU_MEMORY_UTILIZATION" "0.80"
 check_env_val "MAX_NUM_BATCHED_TOKENS" "8192"
+check_env_val "TORCH_CUDA_ARCH_LIST" "12.1a"
+check_env_val "FLASHINFER_CUDA_ARCH_LIST" "12.1a"
+check_env_val "NCCL_NET" "IB"
+check_env_val "NCCL_CROSS_NIC" "1"
+check_env_val "NCCL_CUMEM_ENABLE" "0"
+check_env_val "NCCL_IGNORE_CPU_AFFINITY" "1"
+check_env_val "NCCL_NVLS_ENABLE" "0"
+check_env_val "DG_JIT_USE_NVRTC" "0"
+check_env_val "DG_JIT_NVCC_COMPILER" "/opt/env/bin/nvcc"
+check_env_val "TILELANG_CLEANUP_TEMP_FILES" "1"
+
+if grep -q 'deepgemm-cache-motorinn-v1-rank' "${ROOT_DIR}/${ENTRYPOINT_FILE}"; then
+  log_pass "Entrypoint uses a versioned DeepGEMM cache namespace"
+else
+  log_fail "Entrypoint must not reuse failed DeepGEMM cache artifacts"
+fi
+
+if [ "$(grep -c -- '--enforce-eager' "${ROOT_DIR}/${ENTRYPOINT_FILE}")" -eq 2 ]; then
+  log_pass "Both DSpark ranks skip the startup CUDA graph hang"
+else
+  log_fail "Both DSpark rank commands must use --enforce-eager"
+fi
+
+if [ "$(grep -c '^[[:space:]]*privileged: true$' "${ROOT_DIR}/${COMPOSE_FILE}")" -eq 2 ]; then
+  log_pass "Both DSpark ranks have the validated CUDA JIT permissions"
+else
+  log_fail "Both DSpark services must be privileged for DeepGEMM JIT"
+fi
 
 echo "=============================="
 if [ ${FAILED} -eq 0 ]; then

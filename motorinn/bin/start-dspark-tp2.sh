@@ -81,7 +81,7 @@ while true; do
 
   # Poll health via remote curl
   set +e
-  health_output=$(run_remote "$HEAD_HOST" "curl -fsS --max-time 5 http://127.0.0.1:8000/health" 2>&1)
+  health_output=$(run_remote "$HEAD_HOST" "curl -fsS --max-time 5 http://127.0.0.1:${RUNTIME_PORT}/health" 2>&1)
   health_exit=$?
   set -e
 

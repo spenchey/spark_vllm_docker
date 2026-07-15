@@ -115,7 +115,7 @@ fi
 if echo "$NORMALIZED_CMD" | grep -q "ss -H -ltn"; then
   port=""
   case "$NORMALIZED_CMD" in
-    *:8000*) port="8000" ;;
+    *:8888*) port="8888" ;;
     *:29500*) port="29500" ;;
     *:6379*) port="6379" ;;
     *:8265*) port="8265" ;;
@@ -373,10 +373,10 @@ assert_exit 1 $RUN_EXIT || exit 1
 assert_contains "${OUTPUT_FILE}" "start_allowed=false" || exit 1
 echo "PASS: Test 10"
 
-# Test 11: Occupied Port 8000
-echo "Test 11: Occupied Port 8000"
+# Test 11: Occupied Port 8888
+echo "Test 11: Occupied Port 8888"
 reset_state
-touch "${MOCK_STATE_DIR}/port_8000"
+touch "${MOCK_STATE_DIR}/port_8888"
 run_preflight_test "0"
 assert_exit 1 $RUN_EXIT || exit 1
 assert_contains "${OUTPUT_FILE}" "start_allowed=false" || exit 1

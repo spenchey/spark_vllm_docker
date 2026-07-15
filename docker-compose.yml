@@ -5,6 +5,7 @@ services:
     profiles: ["head"]
     network_mode: host
     ipc: host
+    privileged: true
     environment:
       # ---- Role + cluster mode ----
       - ROLE=head
@@ -197,6 +198,7 @@ services:
     profiles: ["worker"]
     network_mode: host
     ipc: host
+    privileged: true
     environment:
       # ---- Role + cluster mode ----
       - ROLE=worker
