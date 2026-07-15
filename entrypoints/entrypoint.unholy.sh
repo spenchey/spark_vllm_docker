@@ -148,6 +148,7 @@ if [ "${ROLE}" = "worker" ]; then
     --served-model-name "${SERVED_MODEL_NAME}" \
     --host 0.0.0.0 --port "${HOST_PORT:-8000}" \
     --trust-remote-code \
+    --enforce-eager \
     --tensor-parallel-size "${TP_SIZE:-2}" \
     --kv-cache-dtype fp8 \
     --block-size 256 \
@@ -180,6 +181,7 @@ exec vllm serve "${MODEL_CONTAINER_PATH}" \
   --served-model-name "${SERVED_MODEL_NAME}" \
   --host 0.0.0.0 --port "${HOST_PORT:-8000}" \
   --trust-remote-code \
+  --enforce-eager \
   --tensor-parallel-size "${TP_SIZE:-2}" \
   --kv-cache-dtype fp8 \
   --block-size 256 \

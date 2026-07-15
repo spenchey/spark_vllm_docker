@@ -253,6 +253,12 @@ else
   log_fail "Entrypoint must not reuse failed DeepGEMM cache artifacts"
 fi
 
+if [ "$(grep -c -- '--enforce-eager' "${ROOT_DIR}/${ENTRYPOINT_FILE}")" -eq 2 ]; then
+  log_pass "Both DSpark ranks skip the startup CUDA graph hang"
+else
+  log_fail "Both DSpark rank commands must use --enforce-eager"
+fi
+
 echo "=============================="
 if [ ${FAILED} -eq 0 ]; then
   echo "All tests passed."
