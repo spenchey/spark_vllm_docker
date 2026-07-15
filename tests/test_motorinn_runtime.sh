@@ -24,6 +24,16 @@ for shell_file in \
 done
 printf '%s\n' 'PASS: all runtime shell files parse'
 
+for entrypoint in \
+  motorinn/bin/preflight.sh \
+  motorinn/bin/start-dspark-tp2.sh \
+  motorinn/bin/status.sh \
+  motorinn/bin/stop-vllm-spark.sh \
+  motorinn/bin/verify-dspark-model-cache.sh; do
+  [ -x "$entrypoint" ] || fail "runtime entrypoint is not executable: $entrypoint"
+done
+printf '%s\n' 'PASS: all runtime entrypoints are executable'
+
 if grep -RniE '^[[:space:]]*(export[[:space:]]+)?[A-Z_][A-Z0-9_]*(TOKEN|PASSWORD|SECRET|API_KEY|AUTHORIZATION|PRIVATE_KEY)=' motorinn/env; then
   fail 'secret-like key found in motorinn/env'
 fi
