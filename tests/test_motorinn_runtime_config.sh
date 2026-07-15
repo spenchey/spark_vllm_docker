@@ -237,6 +237,11 @@ check_env_val "GPU_MEMORY_UTILIZATION" "0.80"
 check_env_val "MAX_NUM_BATCHED_TOKENS" "8192"
 check_env_val "TORCH_CUDA_ARCH_LIST" "12.1a"
 check_env_val "FLASHINFER_CUDA_ARCH_LIST" "12.1a"
+check_env_val "NCCL_NET" "IB"
+check_env_val "NCCL_CROSS_NIC" "1"
+check_env_val "NCCL_CUMEM_ENABLE" "0"
+check_env_val "NCCL_IGNORE_CPU_AFFINITY" "1"
+check_env_val "NCCL_NVLS_ENABLE" "0"
 
 echo "=============================="
 if [ ${FAILED} -eq 0 ]; then
